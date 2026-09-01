@@ -423,16 +423,8 @@ export class MessageHandler {
       // -------------------------------------------------------------
       // 4. KILL SWITCH & ACCESS CONTROL ENFORCEMENT GATE
       // -------------------------------------------------------------
-      // If AI is killed completely
+      // If AI is killed completely, silently ignore all messages from non-owners (zero credits, zero messages)
       if (botSettings.isAiKilled && !isOwner) {
-        // AI is stopped; ignore silently unless explicit command
-        if (lowerText.startsWith(config.commandPrefix) || lowerText.startsWith('!')) {
-          await sock.sendMessage(
-            chatId,
-            { text: '⏸️ *AI Assistant is currently stopped/paused by the owner.*' },
-            { quoted: msg }
-          );
-        }
         return;
       }
 
@@ -445,26 +437,8 @@ export class MessageHandler {
         chatId
       });
 
+      // If user/chat is not allowed, silently drop message without sending anything (saves credits & avoids spam)
       if (!access.allowed) {
-        // If user sent an explicit command or query, provide polite denial feedback
-        const isExplicitTrigger =
-          lowerText.startsWith('!') ||
-          lowerText.startsWith(config.commandPrefix) ||
-          this.isMentionedOrCommanded(msg, textContent, sock.user?.id);
-
-        if (isExplicitTrigger) {
-          if (access.reason === 'USER_BLOCKED') {
-            await sock.sendMessage(chatId, { text: '⛔ *Access Denied:* You are restricted from using the AI assistant.' }, { quoted: msg });
-          } else if (access.reason === 'CHAT_DISABLED') {
-            await sock.sendMessage(chatId, { text: '⛔ *AI is turned off in this chat.* (Admins can enable with `!chat on`)' }, { quoted: msg });
-          } else if (access.reason === 'NOT_WHITELISTED') {
-            await sock.sendMessage(chatId, { text: '⛔ *Access Denied:* AI assistant is in Whitelist mode. Ask an admin to allow you with `!allow @user`.' }, { quoted: msg });
-          } else if (access.reason === 'ADMIN_ONLY') {
-            await sock.sendMessage(chatId, { text: '⛔ *Access Denied:* AI assistant is restricted to group admins only.' }, { quoted: msg });
-          } else if (access.reason === 'MEMBERS_DISABLED') {
-            await sock.sendMessage(chatId, { text: '⛔ *Access Denied:* Member access to AI is currently disabled.' }, { quoted: msg });
-          }
-        }
         return;
       }
 
