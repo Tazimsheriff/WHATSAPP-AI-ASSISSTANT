@@ -2,12 +2,20 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+function sanitizeModel(modelStr?: string): string {
+  if (!modelStr) return 'google/gemini-2.5-flash';
+  if (modelStr.includes('gemini-2.0-flash-001') || modelStr === 'google/gemini-2.0-flash') {
+    return 'google/gemini-2.5-flash';
+  }
+  return modelStr;
+}
+
 export const config = {
   openrouterApiKey: process.env.OPENROUTER_API_KEY || '',
   geminiApiKey: process.env.GEMINI_API_KEY || '',
   groqApiKey: process.env.GROQ_API_KEY || '',
   openaiApiKey: process.env.OPENAI_API_KEY || '',
-  aiModel: process.env.AI_MODEL || 'google/gemini-2.5-flash',
+  aiModel: sanitizeModel(process.env.AI_MODEL),
   commandPrefix: (process.env.COMMAND_PREFIX || '!ai').toLowerCase(),
   wakeWords: (process.env.WAKE_WORDS || 'assistant,bot,ai')
     .split(',')

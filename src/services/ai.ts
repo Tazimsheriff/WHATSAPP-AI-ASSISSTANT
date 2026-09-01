@@ -104,11 +104,20 @@ Guidelines:
           { role: 'user', content: `[${senderName}]: ${prompt}` }
         ];
 
-        const modelName = config.aiModel || 'google/gemini-2.5-flash';
-        const completion = await this.openrouterClient.chat.completions.create({
-          model: modelName,
-          messages
-        });
+        let modelName = config.aiModel || 'google/gemini-2.5-flash';
+        let completion;
+        try {
+          completion = await this.openrouterClient.chat.completions.create({
+            model: modelName,
+            messages
+          });
+        } catch (callErr: any) {
+          logger.warn({ err: callErr.message, model: modelName }, 'Primary OpenRouter model failed, trying fallback google/gemini-2.5-flash');
+          completion = await this.openrouterClient.chat.completions.create({
+            model: 'google/gemini-2.5-flash',
+            messages
+          });
+        }
 
         const reply = completion.choices[0]?.message?.content || 'No response generated.';
         this.appendToHistory(chatId, { role: 'user', content: prompt, senderName });
