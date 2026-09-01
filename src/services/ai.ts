@@ -1,6 +1,7 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import OpenAI from 'openai';
 import { calendarService, MeetingResult } from './calendar.js';
+import { memoryService } from './memoryService.js';
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 
@@ -81,13 +82,15 @@ export class AIService {
   ): Promise<string> {
     const history = this.getHistory(chatId);
 
+    const memoryContext = memoryService.getMemoryPromptContext(chatId);
+
     const systemInstruction = `You are a smart, helpful, and concise AI WhatsApp Assistant.
 You are running directly inside WhatsApp ${isGroup ? `in a group chat called "${groupSubject || 'Group'}"` : 'in a direct message'}.
 Guidelines:
 - Format your output nicely using WhatsApp markdown (*bold*, _italic_, ~strikethrough~, \`monospace\`, bullet points).
 - Keep replies conversational, concise, and helpful (mobile screen friendly).
 - When addressing users, be polite and natural.
-- You can answer questions, summarize text, assist with brainstorming, calculate, debug code, and more.`;
+- You can answer questions, summarize text, assist with brainstorming, calculate, debug code, and more.${memoryContext}`;
 
     // 1. Try OpenRouter (if configured)
     if (this.openrouterClient) {

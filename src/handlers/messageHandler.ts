@@ -4,6 +4,13 @@ import { botSettings } from '../config/settings.js';
 import { aiService } from '../services/ai.js';
 import { transcriberService } from '../services/transcriber.js';
 import { imageService } from '../services/imageService.js';
+import { memoryService } from '../services/memoryService.js';
+import { reminderService } from '../services/reminderService.js';
+import { searchService } from '../services/searchService.js';
+import { documentService } from '../services/documentService.js';
+import { expenseService } from '../services/expenseService.js';
+import { ttsService } from '../services/ttsService.js';
+import { imageGenService } from '../services/imageGenService.js';
 import { logger } from '../utils/logger.js';
 
 // Message buffer per chat for summarization and context
@@ -36,7 +43,15 @@ export class MessageHandler {
         return;
       }
 
-      if (textContent.includes('[Assistant]') || textContent.startsWith('🤖') || textContent.startsWith('⏳') || textContent.startsWith('🔍')) {
+      if (
+        textContent.includes('[Assistant]') ||
+        textContent.startsWith('🤖') ||
+        textContent.startsWith('⏳') ||
+        textContent.startsWith('🔍') ||
+        textContent.startsWith('⏰') ||
+        textContent.startsWith('💰') ||
+        textContent.startsWith('🧾')
+      ) {
         return;
       }
 
@@ -63,11 +78,48 @@ export class MessageHandler {
         }
       }
 
-      // Handle Image Analysis (direct image or quoted image)
+      // Handle Document Analysis (PDF, CSV, TXT, Word)
+      const docInfo = documentService.extractDocumentInfo(msg.message);
+      if (docInfo) {
+        const hasTrigger = this.isMentionedOrCommanded(msg, textContent, sock.user?.id);
+        const lowerRaw = textContent.toLowerCase();
+        const shouldProcessDoc =
+          hasTrigger ||
+          docInfo.isQuoted ||
+          lowerRaw.includes('summarize') ||
+          lowerRaw.includes('read') ||
+          lowerRaw.includes('analyze') ||
+          (!isGroup && botSettings.autoReplyDms) ||
+          (isSelfChat && !isFromMe);
+
+        if (shouldProcessDoc) {
+          logger.info({ chatId, fileName: docInfo.fileName }, 'Processing document with AI');
+          await sock.sendMessage(chatId, { text: `📄 *Reading & analyzing "${docInfo.fileName}" with AI...*` }, { quoted: msg });
+          const reply = await documentService.handleDocumentAnalysis(msg, docInfo, textContent, senderName, chatId);
+          await sock.sendMessage(chatId, { text: reply }, { quoted: msg });
+          return;
+        }
+      }
+
+      // Handle Image Analysis & Receipt Tracking (direct image or quoted image)
       const imageInfo = imageService.extractImageMessage(msg.message);
       if (imageInfo) {
         const hasTrigger = this.isMentionedOrCommanded(msg, textContent, sock.user?.id);
         const lowerRaw = textContent.toLowerCase();
+
+        // Check if user is logging an expense from receipt
+        if (lowerRaw.includes('expense') || lowerRaw.includes('receipt') || lowerRaw.includes('bill')) {
+          await sock.sendMessage(chatId, { text: '🧾 *Scanning receipt with AI...*' }, { quoted: msg });
+          const imgBuffer = await imageService.downloadImageBuffer(imageInfo.image);
+          if (imgBuffer) {
+            const reply = await expenseService.logExpenseFromReceipt(imgBuffer, imageInfo.image.mimetype || 'image/jpeg', chatId, senderName);
+            await sock.sendMessage(chatId, { text: reply }, { quoted: msg });
+          } else {
+            await sock.sendMessage(chatId, { text: '⚠️ Could not download receipt image.' }, { quoted: msg });
+          }
+          return;
+        }
+
         const shouldProcessImage =
           hasTrigger ||
           (imageInfo.isQuoted && (lowerRaw.startsWith(config.commandPrefix) || lowerRaw.includes('review') || lowerRaw.includes('describe') || lowerRaw.includes('what') || lowerRaw.includes('explain') || lowerRaw.includes('solve') || lowerRaw.includes('read') || lowerRaw.includes('summarize'))) ||
@@ -107,8 +159,174 @@ export class MessageHandler {
 
       // Ping command
       if (lowerText === '!ping' || lowerText === `${config.commandPrefix} ping`) {
-        const statusMsg = `🤖 *WhatsApp AI Assistant is Active!*\n\n• *Model:* \`${config.aiModel}\`\n• *Mode:* Tag/Command only (safe for all chats)\n• *Commands:* \`${config.commandPrefix}\`, \`!meet\`, \`!summarize\`, \`!ping\`, \`!help\``;
+        const statusMsg = `🤖 *WhatsApp AI Assistant is Active!*\n\n• *Model:* \`${config.aiModel}\`\n• *Mode:* Tag/Command only (safe for all chats)\n• *Memory:* Active\n• *Reminders:* Active\n• *Commands:* \`${config.commandPrefix}\`, \`!remember\`, \`!remind\`, \`!search\`, \`!expense\`, \`!imagine\`, \`!speak\`, \`!meet\`, \`!help\``;
         await sock.sendMessage(chatId, { text: statusMsg }, { quoted: msg });
+        return;
+      }
+
+      // Memory Commands: !remember <fact>, !memories, !forget <id>
+      if (lowerText.startsWith('!remember ') || lowerText.startsWith(`${config.commandPrefix} remember `)) {
+        const fact = trimmedText.replace(/^!remember\s+/i, '').replace(new RegExp(`^${config.commandPrefix}\\s*remember\\s+`, 'i'), '').trim();
+        if (!fact) {
+          await sock.sendMessage(chatId, { text: '💡 Usage: `!remember <fact>` (e.g. `!remember my gym time is 7 AM`)' }, { quoted: msg });
+          return;
+        }
+        const item = memoryService.storeMemory(chatId, fact);
+        await sock.sendMessage(chatId, { text: `🧠 *Fact Remembered!*\n\n📌 "${item.fact}"\n🆔 \`#${item.id}\`\n\n_I will remember this across all our conversations._` }, { quoted: msg });
+        return;
+      }
+
+      if (lowerText === '!memories' || lowerText === `${config.commandPrefix} memories`) {
+        const memoryList = memoryService.listMemories(chatId);
+        await sock.sendMessage(chatId, { text: memoryList }, { quoted: msg });
+        return;
+      }
+
+      if (lowerText.startsWith('!forget ') || lowerText.startsWith(`${config.commandPrefix} forget `)) {
+        const id = trimmedText.replace(/^!forget\s+/i, '').replace(new RegExp(`^${config.commandPrefix}\\s*forget\\s+`, 'i'), '').trim().replace(/^#/, '');
+        const success = memoryService.forgetMemory(id);
+        if (success) {
+          await sock.sendMessage(chatId, { text: `🗑️ *Forgotten memory [#${id}] successfully.*` }, { quoted: msg });
+        } else {
+          await sock.sendMessage(chatId, { text: `⚠️ Memory with ID \`#${id}\` not found. Type \`!memories\` to see active IDs.` }, { quoted: msg });
+        }
+        return;
+      }
+
+      // Reminder Commands: !remind <time> to <task>, !reminders, !delreminder <id>
+      if (lowerText.startsWith('!remind ') || lowerText.startsWith(`${config.commandPrefix} remind `)) {
+        const prompt = trimmedText.replace(/^!remind\s+/i, '').replace(new RegExp(`^${config.commandPrefix}\\s*remind\\s+`, 'i'), '').trim();
+        const res = reminderService.parseAndSchedule(chatId, senderName, prompt);
+        await sock.sendMessage(chatId, { text: res.message }, { quoted: msg });
+        return;
+      }
+
+      if (lowerText === '!reminders' || lowerText === `${config.commandPrefix} reminders`) {
+        const remindersList = reminderService.listReminders(chatId);
+        await sock.sendMessage(chatId, { text: remindersList }, { quoted: msg });
+        return;
+      }
+
+      if (lowerText.startsWith('!delreminder ') || lowerText.startsWith(`${config.commandPrefix} delreminder `)) {
+        const id = trimmedText.replace(/^!delreminder\s+/i, '').replace(new RegExp(`^${config.commandPrefix}\\s*delreminder\\s+`, 'i'), '').trim().replace(/^#/, '');
+        const success = reminderService.deleteReminder(id);
+        if (success) {
+          await sock.sendMessage(chatId, { text: `🗑️ *Cancelled reminder [#${id}] successfully.*` }, { quoted: msg });
+        } else {
+          await sock.sendMessage(chatId, { text: `⚠️ Reminder with ID \`#${id}\` not found. Type \`!reminders\` to see active IDs.` }, { quoted: msg });
+        }
+        return;
+      }
+
+      // Live Web Search: !search <query> or !google <query> or !web <query>
+      if (
+        lowerText.startsWith('!search ') ||
+        lowerText.startsWith('!google ') ||
+        lowerText.startsWith('!web ') ||
+        lowerText.startsWith(`${config.commandPrefix} search `)
+      ) {
+        const query = trimmedText
+          .replace(/^!(search|google|web)\s+/i, '')
+          .replace(new RegExp(`^${config.commandPrefix}\\s*search\\s+`, 'i'), '')
+          .trim();
+
+        if (!query) {
+          await sock.sendMessage(chatId, { text: '💡 Usage: `!search <query>` (e.g. `!search latest AI news today`)' }, { quoted: msg });
+          return;
+        }
+
+        await sock.sendMessage(chatId, { text: '🌐 *Searching the web in real-time...*' }, { quoted: msg });
+        const searchReply = await searchService.searchAndSummarize(query, senderName);
+        await sock.sendMessage(chatId, { text: searchReply }, { quoted: msg });
+        return;
+      }
+
+      // Expense & Budget Commands: !expense <amount> <desc>, !expenses, !export expenses
+      if (lowerText.startsWith('!expense ') || lowerText.startsWith(`${config.commandPrefix} expense `)) {
+        const input = trimmedText.replace(/^!expense\s+/i, '').replace(new RegExp(`^${config.commandPrefix}\\s*expense\\s+`, 'i'), '').trim();
+        const res = expenseService.logExpenseFromText(chatId, senderName, input);
+        await sock.sendMessage(chatId, { text: res.message }, { quoted: msg });
+        return;
+      }
+
+      if (lowerText === '!expenses' || lowerText === `${config.commandPrefix} expenses`) {
+        const summary = expenseService.getExpenseSummary(chatId);
+        await sock.sendMessage(chatId, { text: summary }, { quoted: msg });
+        return;
+      }
+
+      if (lowerText === '!export expenses' || lowerText === '!export' || lowerText === `${config.commandPrefix} export expenses`) {
+        const csv = expenseService.generateCSV(chatId);
+        await sock.sendMessage(
+          chatId,
+          {
+            document: csv.buffer,
+            fileName: csv.filename,
+            mimetype: 'text/csv',
+            caption: '📊 *Here is your full expense ledger spreadsheet (.CSV)*'
+          },
+          { quoted: msg }
+        );
+        return;
+      }
+
+      // Voice Audio / TTS Command: !speak <text> or !tts <text>
+      if (
+        lowerText.startsWith('!speak ') ||
+        lowerText.startsWith('!tts ') ||
+        lowerText.startsWith(`${config.commandPrefix} speak `)
+      ) {
+        const speechText = trimmedText
+          .replace(/^!(speak|tts)\s+/i, '')
+          .replace(new RegExp(`^${config.commandPrefix}\\s*speak\\s+`, 'i'), '')
+          .trim();
+
+        if (!speechText) {
+          await sock.sendMessage(chatId, { text: '💡 Usage: `!speak <text>` (e.g. `!speak Good morning! You have 3 meetings today`)' }, { quoted: msg });
+          return;
+        }
+
+        await sock.sendMessage(chatId, { text: '🎙️ *Generating voice note...*' }, { quoted: msg });
+        const audio = await ttsService.generateSpeechBuffer(speechText);
+        if (audio) {
+          await sock.sendMessage(chatId, { audio: audio.buffer, mimetype: audio.mimetype, ptt: true }, { quoted: msg });
+        } else {
+          await sock.sendMessage(chatId, { text: '⚠️ Failed to generate audio voice note.' }, { quoted: msg });
+        }
+        return;
+      }
+
+      // AI Image Generation: !imagine <prompt> or !draw <prompt>
+      if (
+        lowerText.startsWith('!imagine ') ||
+        lowerText.startsWith('!draw ') ||
+        lowerText.startsWith('!image ') ||
+        lowerText.startsWith(`${config.commandPrefix} imagine `)
+      ) {
+        const imgPrompt = trimmedText
+          .replace(/^!(imagine|draw|image)\s+/i, '')
+          .replace(new RegExp(`^${config.commandPrefix}\\s*imagine\\s+`, 'i'), '')
+          .trim();
+
+        if (!imgPrompt) {
+          await sock.sendMessage(chatId, { text: '💡 Usage: `!imagine <prompt>` (e.g. `!imagine cyberpunk sports car in rain 4k`' }, { quoted: msg });
+          return;
+        }
+
+        await sock.sendMessage(chatId, { text: '🎨 *Generating AI image with Flux...*' }, { quoted: msg });
+        const imgResult = await imageGenService.generateImage(imgPrompt);
+        if (imgResult) {
+          await sock.sendMessage(
+            chatId,
+            {
+              image: imgResult.buffer,
+              caption: `🎨 *AI Generated Image*\n📌 "${imgResult.prompt}"`
+            },
+            { quoted: msg }
+          );
+        } else {
+          await sock.sendMessage(chatId, { text: '⚠️ Failed to generate image. Please try again.' }, { quoted: msg });
+        }
         return;
       }
 
@@ -199,12 +417,10 @@ export class MessageHandler {
         return;
       }
 
-      // Auto-reply mode toggle command: !autoreply on / !autoreply off / !autoreply status
+      // Persistent Auto-Reply Toggle Command: !autoreply on / off
       if (
         lowerText === '!autoreply' ||
         lowerText.startsWith('!autoreply ') ||
-        lowerText === '!auto' ||
-        lowerText.startsWith('!auto ') ||
         lowerText === `${config.commandPrefix} autoreply` ||
         lowerText.startsWith(`${config.commandPrefix} autoreply `)
       ) {
@@ -299,7 +515,7 @@ export class MessageHandler {
         if (!cleanedPrompt) {
           await sock.sendMessage(
             chatId,
-            { text: `👋 Hi ${senderName}! I'm listening. Ask me anything or type \`${config.commandPrefix} <your question>\` or \`!meet ...\`.` },
+            { text: `👋 Hi ${senderName}! I'm listening. Ask me anything or type \`${config.commandPrefix} <your question>\` or \`!help\`.` },
             { quoted: msg }
           );
           return;
@@ -327,246 +543,163 @@ export class MessageHandler {
         return;
       }
 
-      // Auto-reply to DMs if enabled in settings
-      if (!isGroup && !isFromMe && botSettings.autoReplyDms && trimmedText.length > 0) {
-        logger.info({ chatId, senderName }, 'Auto-replying to unprompted DM');
+      // Safe Direct Message Auto-Reply (Only active if autoReplyDms is explicitly turned ON)
+      if (!isGroup && botSettings.autoReplyDms && !isFromMe) {
+        logger.info({ chatId, senderName }, 'Auto-replying to direct message (autoReplyDms is ON)');
         const reply = await aiService.generateReply(chatId, trimmedText, senderName, false);
         await sock.sendMessage(chatId, { text: reply }, { quoted: msg });
         return;
       }
-
     } catch (err: any) {
-      logger.error({ err }, 'Error in messageHandler');
+      logger.error({ err: err?.message || err }, 'Error handling message');
     }
   }
 
   /**
-   * Handles group participant actions: add, remove/kick, promote, demote, invite link
+   * Handles group moderation actions
    */
   private async handleGroupModeration(
     sock: WASocket,
     msg: WAMessage,
     chatId: string,
-    action: 'add' | 'remove' | 'promote' | 'demote' | 'invite',
+    action: string,
     rawText: string,
-    isFromMe: boolean,
+    isSenderFromMe: boolean,
     senderJid: string
   ): Promise<void> {
     try {
       const groupMeta = await sock.groupMetadata(chatId);
-      const myNum = (sock.user?.id || '').split(':')[0].split('@')[0];
-      const myLidNum = (sock.user?.lid || '').split(':')[0].split('@')[0];
+      const myJid = sock.user?.id ? sock.user.id.split(':')[0] + '@s.whatsapp.net' : '';
+      const myLid = sock.user?.lid ? sock.user.lid.split(':')[0] + '@lid' : '';
 
-      // Match bot in group participants using phone number or LID
-      const botMember = groupMeta.participants.find(p => 
-        (myNum && p.id.includes(myNum)) || (myLidNum && p.id.includes(myLidNum))
-      );
-      const isBotAdmin = botMember?.admin === 'admin' || botMember?.admin === 'superadmin';
+      const myParticipant = groupMeta.participants.find(p => p.id === myJid || (myLid && p.id === myLid));
+      const isBotAdmin = myParticipant?.admin === 'admin' || myParticipant?.admin === 'superadmin';
 
-      // Invite link generation
-      if (action === 'invite') {
-        if (!isBotAdmin) {
-          await sock.sendMessage(chatId, { text: '⚠️ I need to be a *Group Admin* to generate the group invite link!' }, { quoted: msg });
-          return;
-        }
-        const inviteCode = await sock.groupInviteCode(chatId);
-        await sock.sendMessage(chatId, { text: `🔗 *Group Invite Link:*\nhttps://chat.whatsapp.com/${inviteCode}` }, { quoted: msg });
-        return;
-      }
-
-      // Check bot admin permissions
       if (!isBotAdmin) {
         await sock.sendMessage(
           chatId,
-          { text: `⚠️ I cannot *${action}* members because my account is not recognized as a *Group Admin* in this group. Please make sure I am an Admin.` },
+          { text: '⚠️ *I need Admin permissions in this group* to add, remove, promote, or manage members.' },
           { quoted: msg }
         );
         return;
       }
 
-      // Check sender admin permissions
-      const senderNum = senderJid.split(':')[0].split('@')[0];
-      const senderMember = groupMeta.participants.find(p => 
-        (senderNum && p.id.includes(senderNum)) || (myLidNum && p.id.includes(myLidNum)) || (myNum && p.id.includes(myNum))
-      );
-      const isSenderAdmin = isFromMe || senderMember?.admin === 'admin' || senderMember?.admin === 'superadmin';
+      const senderParticipant = groupMeta.participants.find(p => p.id === senderJid);
+      const isSenderAdmin = isSenderFromMe || senderParticipant?.admin === 'admin' || senderParticipant?.admin === 'superadmin';
 
-      if (!isSenderAdmin) {
+      if (!isSenderAdmin && action !== 'invite') {
         await sock.sendMessage(
           chatId,
-          { text: `⛔ *Permission Denied:* Only *Group Admins* or the bot owner can use moderation commands.` },
+          { text: '⛔ *Only group admins can use moderation commands.*' },
           { quoted: msg }
         );
         return;
       }
 
-      const isCommunityLinked = Boolean(groupMeta.linkedParentJid || (groupMeta as any).isCommunity || (groupMeta as any).isCommunityAnnounce);
-
-      // Extract target participant JIDs
-      const rawTargetJids: string[] = [];
-
-      // 1. Tagged / Mentioned users in message
-      const mentionedJids = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
-      mentionedJids.forEach(j => {
-        if (!rawTargetJids.includes(j)) rawTargetJids.push(j);
-      });
-
-      // 2. Quoted message author (Crucial for Community groups with hidden phone numbers / LIDs)
-      const quotedParticipant = msg.message?.extendedTextMessage?.contextInfo?.participant;
-      if (quotedParticipant && !rawTargetJids.includes(quotedParticipant)) {
-        rawTargetJids.push(quotedParticipant);
-      }
-
-      // 3. Raw phone numbers in text (e.g. +919876543210 or 7550066128)
-      const phoneMatches = rawText.match(/\+?\d{8,15}/g) || [];
-      phoneMatches.forEach(num => {
-        const clean = num.replace(/\+/g, '').trim();
-        if (!rawTargetJids.includes(clean)) rawTargetJids.push(clean);
-      });
-
-      // Match targets to actual group participant IDs (or construct JID for 'add')
-      const targetJids: string[] = [];
-      for (const t of rawTargetJids) {
-        let cleanTarget = t.replace(/[^0-9]/g, '');
-
-        // Auto-normalize 10-digit Indian numbers (e.g. 7871640149 -> 917871640149)
-        if (cleanTarget.length === 10 && /^[6-9]/.test(cleanTarget)) {
-          cleanTarget = `91${cleanTarget}`;
-        } else if (cleanTarget.length === 11 && cleanTarget.startsWith('0')) {
-          cleanTarget = `91${cleanTarget.slice(1)}`;
-        }
-
-        // Search in existing group participants (checks exact match, phone match, or LID match)
-        const matchedMember = groupMeta.participants.find(p => 
-          p.id === t || 
-          p.id.includes(cleanTarget) || 
-          (p.id.split('@')[0].includes(cleanTarget))
+      // Action: Get invite link
+      if (action === 'invite') {
+        const inviteCode = await sock.groupInviteCode(chatId);
+        const inviteUrl = `https://chat.whatsapp.com/${inviteCode}`;
+        await sock.sendMessage(
+          chatId,
+          { text: `🔗 *Group Invite Link:*\n${inviteUrl}\n\n_Share this link for people to join._` },
+          { quoted: msg }
         );
+        return;
+      }
 
-        if (matchedMember) {
-          if (!targetJids.includes(matchedMember.id)) targetJids.push(matchedMember.id);
-        } else {
-          // If action is 'add', build standard JID
-          const formattedJid = t.includes('@') ? t : `${cleanTarget}@s.whatsapp.net`;
-          if (!targetJids.includes(formattedJid)) targetJids.push(formattedJid);
+      // Extract target participant
+      let targetJid: string | null = null;
+      const quotedParticipant =
+        msg.message?.extendedTextMessage?.contextInfo?.participant ||
+        msg.message?.ephemeralMessage?.message?.extendedTextMessage?.contextInfo?.participant;
+
+      if (quotedParticipant) {
+        targetJid = quotedParticipant;
+      }
+
+      const mentionedJid = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid?.[0];
+      if (!targetJid && mentionedJid) {
+        targetJid = mentionedJid;
+      }
+
+      if (!targetJid) {
+        const phoneMatch = rawText.match(/(?:\+?\d{1,3})?[-.\s]?\(?\d{3,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}/);
+        if (phoneMatch) {
+          let cleaned = phoneMatch[0].replace(/[^0-9]/g, '');
+          if (cleaned.length === 10) cleaned = '91' + cleaned;
+          targetJid = `${cleaned}@s.whatsapp.net`;
         }
       }
 
-      if (targetJids.length === 0) {
+      if (!targetJid) {
         await sock.sendMessage(
           chatId,
           {
-            text: `⚠️ *Please specify the target user!*\n\n• *Reply:* Quote their message and type \`!${action}\` *(Recommended for Communities)*\n• *Tag:* \`!${action} @user\`\n• *Phone:* \`!${action} +919876543210\``
+            text: `⚠️ *Please mention, reply to, or provide the phone number of the target user.*\n\nExamples:\n• \`!${action} @user\`\n• Reply to their message with \`!${action}\`\n• \`!add +919876543210\``
           },
           { quoted: msg }
         );
         return;
       }
 
-      logger.info({ chatId, action, targetJids, isCommunityLinked }, 'Executing group participants update');
-      const response = await sock.groupParticipantsUpdate(chatId, targetJids, action);
-      logger.info({ response }, 'Group participants update response');
+      const targetDisplay = `@${targetJid.split('@')[0]}`;
 
-      // Process detailed result statuses from WhatsApp
-      if (Array.isArray(response) && response.length > 0) {
-        for (const res of response) {
-          const resJid = res.jid || targetJids[0];
-          const cleanResNum = resJid.split('@')[0];
-          const statusCode = String(res.status);
+      if (action === 'remove') {
+        await sock.groupParticipantsUpdate(chatId, [targetJid], 'remove');
+        await sock.sendMessage(chatId, { text: `✅ 👢 Removed ${targetDisplay} from group.`, mentions: [targetJid] });
+      } else if (action === 'add') {
+        const addResponse = await sock.groupParticipantsUpdate(chatId, [targetJid], 'add');
+        const status = addResponse?.[0]?.status;
 
-          if (statusCode === '200') {
-            const actionLabels: Record<string, string> = {
-              add: '➕ Added to group',
-              remove: '🚫 Removed from group',
-              promote: '⭐ Promoted to Admin',
-              demote: '🔻 Demoted from Admin'
-            };
-            await sock.sendMessage(
-              chatId,
-              { text: `✅ *${actionLabels[action] || action}:* @${cleanResNum}`, mentions: [resJid] },
-              { quoted: msg }
-            );
-          } else if (statusCode === '403' || statusCode === '400') {
-            // Privacy setting or Community restriction prevents direct addition -> generate invite link
-            const inviteCode = await sock.groupInviteCode(chatId).catch(() => '');
-            let inviteMsg = isCommunityLinked
-              ? `ℹ️ In *WhatsApp Communities*, members cannot be added directly by phone number.`
-              : `⚠️ Cannot add @${cleanResNum} directly due to their WhatsApp privacy settings.`;
-            if (inviteCode) {
-              inviteMsg += `\n\n🔗 *Please share this invite link for them to join:*\nhttps://chat.whatsapp.com/${inviteCode}`;
+        if (status === '403') {
+          const inviteCode = await sock.groupInviteCode(chatId);
+          await sock.sendMessage(
+            chatId,
+            {
+              text: `⚠️ Could not add ${targetDisplay} directly (their privacy settings or Community settings require an invite).\n\n🔗 *Invite Link:* https://chat.whatsapp.com/${inviteCode}`,
+              mentions: [targetJid]
             }
-            await sock.sendMessage(chatId, { text: inviteMsg, mentions: [resJid] }, { quoted: msg });
-          } else if (statusCode === '409') {
-            await sock.sendMessage(
-              chatId,
-              { text: `ℹ️ @${cleanResNum} is already in the group.`, mentions: [resJid] },
-              { quoted: msg }
-            );
-          } else if (statusCode === '408') {
-            await sock.sendMessage(
-              chatId,
-              { text: `⏳ Invitation or request for @${cleanResNum} timed out.`, mentions: [resJid] },
-              { quoted: msg }
-            );
-          } else {
-            const inviteCode = await sock.groupInviteCode(chatId).catch(() => '');
-            let errMsg = `⚠️ Could not ${action} @${cleanResNum} (Status: ${statusCode}).`;
-            if (inviteCode && action === 'add') {
-              errMsg += `\n\n🔗 *You can invite them with this link:*\nhttps://chat.whatsapp.com/${inviteCode}`;
-            }
-            await sock.sendMessage(chatId, { text: errMsg, mentions: [resJid] }, { quoted: msg });
-          }
+          );
+        } else {
+          await sock.sendMessage(chatId, { text: `✅ ➕ Added ${targetDisplay} to group.`, mentions: [targetJid] });
         }
-      } else {
-        const targetMentions = targetJids.map(j => `@${j.split('@')[0]}`).join(', ');
-        await sock.sendMessage(
-          chatId,
-          { text: `✅ *Updated group:* ${targetMentions}`, mentions: targetJids },
-          { quoted: msg }
-        );
+      } else if (action === 'promote') {
+        await sock.groupParticipantsUpdate(chatId, [targetJid], 'promote');
+        await sock.sendMessage(chatId, { text: `✅ ⭐ Promoted ${targetDisplay} to group admin!`, mentions: [targetJid] });
+      } else if (action === 'demote') {
+        await sock.groupParticipantsUpdate(chatId, [targetJid], 'demote');
+        await sock.sendMessage(chatId, { text: `✅ 🔻 Demoted ${targetDisplay} from admin.`, mentions: [targetJid] });
       }
     } catch (err: any) {
-      logger.error({ err, chatId, action }, 'Failed to update group participants');
-      await sock.sendMessage(
-        chatId,
-        { text: `⚠️ Failed to ${action} participant: ${err.message || 'Unknown error. Verify bot has admin rights.'}` },
-        { quoted: msg }
-      );
+      logger.error({ err: err?.message || err }, 'Error executing group moderation action');
+      await sock.sendMessage(chatId, { text: `⚠️ Failed to execute moderation action: ${err?.message || 'Permission denied or invalid user'}` }, { quoted: msg });
     }
   }
 
   private isGroupModerationIntent(text: string): boolean {
     const lower = text.toLowerCase();
-    const modKeywords = [
-      'remove ',
-      'kick ',
-      'remove user',
-      'kick user',
-      'add ',
-      'add user',
-      'promote ',
-      'demote ',
-      'make admin',
-      'remove admin',
-      'group link',
-      'invite link'
-    ];
-    return modKeywords.some(kw => lower.includes(kw));
+    return (
+      lower.includes('kick ') ||
+      lower.includes('remove ') ||
+      lower.includes('add ') ||
+      lower.includes('promote ') ||
+      lower.includes('demote ') ||
+      lower.includes('invite link') ||
+      lower.includes('group link')
+    );
   }
 
-  private extractModerationAction(text: string): 'add' | 'remove' | 'promote' | 'demote' | 'invite' | null {
+  private extractModerationAction(text: string): string | null {
     const lower = text.toLowerCase();
-    if (lower.includes('kick') || lower.includes('remove ') || lower.includes('kick user') || lower.includes('remove user')) return 'remove';
-    if (lower.includes('add ') || lower.includes('add user') || lower.includes('invite user')) return 'add';
+    if (lower.includes('kick') || lower.includes('remove')) return 'remove';
+    if (lower.includes('add')) return 'add';
     if (lower.includes('promote') || lower.includes('make admin')) return 'promote';
     if (lower.includes('demote') || lower.includes('remove admin')) return 'demote';
-    if (lower.includes('group link') || lower.includes('invite link')) return 'invite';
+    if (lower.includes('invite') || lower.includes('link')) return 'invite';
     return null;
   }
 
-  /**
-   * Helper to extract string text from varied WhatsApp message types
-   */
   private extractTextContent(message?: proto.IMessage | null): string {
     if (!message) return '';
     return (
@@ -575,27 +708,35 @@ export class MessageHandler {
       message.imageMessage?.caption ||
       message.videoMessage?.caption ||
       message.documentMessage?.caption ||
+      message.ephemeralMessage?.message?.conversation ||
+      message.ephemeralMessage?.message?.extendedTextMessage?.text ||
+      message.ephemeralMessage?.message?.imageMessage?.caption ||
       ''
     );
   }
 
-  /**
-   * Checks if user is tagged in message contextInfo
-   */
-  private isUserTagged(msg: WAMessage, userJid: string): boolean {
-    if (!userJid) return false;
-    const mentionedJids = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
-    const myCleanNumber = userJid.split('@')[0];
-    return mentionedJids.some(jid => jid.includes(myCleanNumber));
+  private isMentionedOrCommanded(msg: WAMessage, text: string, myJid?: string): boolean {
+    const lower = text.toLowerCase();
+    if (lower.startsWith(config.commandPrefix) || lower.startsWith('!')) return true;
+
+    if (myJid) {
+      const myPhoneNumber = myJid.split(':')[0];
+      if (this.isUserTagged(msg, `${myPhoneNumber}@s.whatsapp.net`)) return true;
+    }
+
+    return config.wakeWords.some(w => {
+      const regex = new RegExp(`(^|\\s|@)${w}\\b`, 'i');
+      return regex.test(lower);
+    });
   }
 
-  private isMentionedOrCommanded(msg: WAMessage, text: string, myJid?: string): boolean {
-    if (this.isUserTagged(msg, myJid || '')) return true;
-    const lower = text.toLowerCase();
-    return (
-      lower.startsWith(config.commandPrefix) ||
-      config.wakeWords.some(w => lower.includes(w))
-    );
+  private isUserTagged(msg: WAMessage, userJid: string): boolean {
+    if (!userJid) return false;
+    const mentionedJids =
+      msg.message?.extendedTextMessage?.contextInfo?.mentionedJid ||
+      msg.message?.ephemeralMessage?.message?.extendedTextMessage?.contextInfo?.mentionedJid ||
+      [];
+    return mentionedJids.includes(userJid);
   }
 
   private cacheGroupMessage(chatId: string, sender: string, text: string) {
@@ -610,9 +751,6 @@ export class MessageHandler {
     }
   }
 
-  /**
-   * Detects if a text prompt contains intent to schedule a meeting/event
-   */
   private isMeetingIntent(text: string): boolean {
     const lower = text.toLowerCase();
     const meetingKeywords = [
@@ -640,33 +778,52 @@ export class MessageHandler {
   }
 
   private getHelpMessage(): string {
-    return `🤖 *WhatsApp AI Assistant - Commands & Features*
+    return `🤖 *WHATSAPP AI EXECUTIVE ASSISTANT - COMMANDS*
 
-• \`${config.commandPrefix} <prompt>\` : Ask anything to the AI
-• \`!autoreply on / off\` : Toggle auto-answering DMs on or off
-• \`!meet <details>\` : Schedule a meeting, Google Meet & invite emails (e.g. \`!meet Tomorrow at 4 PM with colleague@gmail.com for Sync\`)
-• \`!summarize [number]\` : Summarize recent group chat messages (e.g. \`!summarize 20\`)
-• \`!ping\` : Check bot connection and status
-• \`!help\` : Show this help menu
+🧠 *Long-Term Memory & Knowledge:*
+• \`!remember <fact>\` : Save fact (e.g. \`!remember my gym time is 7 AM\`)
+• \`!memories\` : View all saved memories & preferences
+• \`!forget <ID>\` : Delete a stored memory
 
-👥 *Group Admin & Moderation Commands*:
-• \`!add <phone_number>\` : Add a user to group (e.g. \`!add +919876543210\`)
-• \`!kick\` or \`!remove <@user>\` : Remove member from group (or reply to their message with \`!kick\`)
-• \`!promote <@user>\` : Make member an admin
-• \`!demote <@user>\` : Remove admin status
-• \`!invite\` or \`!link\` : Get group invite link
+⏰ *Proactive Scheduled Reminders:*
+• \`!remind in 30 mins to <task>\` : Schedule a reminder
+• \`!remind tomorrow at 9:00 AM to <task>\` : Schedule future reminder
+• \`!reminders\` : List all active reminders
+• \`!delreminder <ID>\` : Cancel a reminder
 
-📅 *Google Meet & Calendar Scheduling*:
-Schedule meetings in natural language! Say:
-_\`!meet Friday 3:00 PM with alice@gmail.com for Design Review\`_
+🌐 *Real-Time Web Search:*
+• \`!search <query>\` : Search the web live (e.g. \`!search latest tech news\`)
 
-🎙️ *Voice Notes & Audio*:
-Send or forward any voice note, and I will automatically transcribe and summarize it for you!
+💰 *Expense & Receipt Tracker:*
+• \`!expense <amount> <desc>\` : Log expense (e.g. \`!expense 450 lunch\`)
+• *Send photo of Receipt* : Automatically scans & logs items & amount
+• \`!expenses\` : View spending budget breakdown
+• \`!export expenses\` : Download complete .CSV spreadsheet
 
-💬 *Group Chat Triggers*:
-Tag me (@me) or use wake words (*${config.wakeWords.join(', ')}*) or use \`${config.commandPrefix}\` in any group.`;
+🎨 *AI Image Generation:*
+• \`!imagine <prompt>\` : Generate high-res AI image (e.g. \`!imagine cyberpunk city\`)
+
+🎙️ *Voice Notes & Text-to-Speech:*
+• \`!speak <text>\` : Generate a voice note audio reply
+• *Send Voice Note* : Automatically transcribes audio to text
+
+📄 *Document & PDF Intelligence:*
+• *Send PDF / CSV / Doc* : AI reads, summarizes, and answers questions
+
+📅 *Google Meet & Calendar:*
+• \`!meet <details>\` : Schedule event & generate Meet link
+
+🛡️ *Group Administration:*
+• \`!kick / !remove @user\` : Remove user
+• \`!add <phone>\` : Add user
+• \`!promote / !demote @user\` : Manage admin status
+• \`!invite / !link\` : Group invite link
+• \`!summarize [n]\` : Summarize last [n] messages
+
+⚙️ *Settings:*
+• \`!autoreply on / off\` : Toggle auto-answering DMs
+• \`!ping\` : Bot connection & model status`;
   }
 }
 
 export const messageHandler = new MessageHandler();
-

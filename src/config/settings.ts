@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { config } from './index';
+import { config } from './index.js';
 
 interface BotSettings {
   autoReplyDms: boolean;

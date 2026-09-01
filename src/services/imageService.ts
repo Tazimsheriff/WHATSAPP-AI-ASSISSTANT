@@ -27,6 +27,23 @@ export class ImageService {
   }
 
   /**
+   * Downloads image buffer from WhatsApp image message
+   */
+  public async downloadImageBuffer(imageMessage: proto.Message.IImageMessage): Promise<Buffer | null> {
+    try {
+      const stream = await downloadContentFromMessage(imageMessage, 'image');
+      const chunks: Buffer[] = [];
+      for await (const chunk of stream) {
+        chunks.push(chunk);
+      }
+      return Buffer.concat(chunks);
+    } catch (err: any) {
+      logger.error({ err: err.message }, 'Failed to download image buffer');
+      return null;
+    }
+  }
+
+  /**
    * Downloads image buffer and runs vision analysis with AI
    */
   public async handleImageAnalysis(
@@ -37,12 +54,7 @@ export class ImageService {
   ): Promise<string> {
     try {
       logger.info({ mimetype: imageMessage.mimetype }, 'Downloading image for AI vision analysis...');
-      const stream = await downloadContentFromMessage(imageMessage, 'image');
-      const chunks: Buffer[] = [];
-      for await (const chunk of stream) {
-        chunks.push(chunk);
-      }
-      const buffer = Buffer.concat(chunks);
+      const buffer = await this.downloadImageBuffer(imageMessage);
 
       if (!buffer || buffer.length === 0) {
         return '⚠️ Could not download the image. Please try sending it again.';

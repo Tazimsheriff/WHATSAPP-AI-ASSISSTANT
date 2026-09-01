@@ -11,6 +11,7 @@ import pino from 'pino';
 import qrcode from 'qrcode-terminal';
 import { config } from '../config/index.js';
 import { messageHandler } from '../handlers/messageHandler.js';
+import { reminderService } from '../services/reminderService.js';
 import { logger } from '../utils/logger.js';
 
 // In-memory store of recent message protos to satisfy retry / re-decryption requests
@@ -91,12 +92,14 @@ export class WhatsAppClient {
         }
       } else if (connection === 'open') {
         logger.info('🚀 Successfully connected to WhatsApp! AI Assistant is now online.');
+        reminderService.init(() => this.sock);
         const userJid = this.sock?.user?.id;
         const userName = this.sock?.user?.name;
         console.log('\n=============================================');
         console.log(`✅ Logged in as: ${userName || 'User'} (${userJid?.split(':')[0] || 'Unknown'})`);
         console.log(`🤖 AI Trigger: ${config.commandPrefix} or mention in groups`);
         console.log(`🎙️ Voice Note Transcription: ${config.autoTranscribeAudio ? 'Active' : 'Disabled'}`);
+        console.log('⏰ Background Reminders: Active');
         console.log('=============================================\n');
       }
     });
