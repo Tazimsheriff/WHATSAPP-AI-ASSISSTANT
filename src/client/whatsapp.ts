@@ -34,6 +34,9 @@ export class WhatsAppClient {
       syncFullHistory: false,
       markOnlineOnConnect: true,
       generateHighQualityLinkPreview: true,
+      retryRequestDelayMs: 350,
+      maxMsgRetryCount: 5,
+      shouldIgnoreJid: (jid) => jid.endsWith('@broadcast'),
       getMessage: async (key) => {
         if (key.id && messageStore.has(key.id)) {
           return messageStore.get(key.id);
