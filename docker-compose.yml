@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  whatsapp-assistant:
+    build: .
+    container_name: whatsapp-ai-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Mount session folder so you never have to re-scan QR code after container restarts
+      - ./auth_info_baileys:/app/auth_info_baileys
