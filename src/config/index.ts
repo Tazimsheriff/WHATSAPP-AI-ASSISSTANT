@@ -7,7 +7,7 @@ export const config = {
   geminiApiKey: process.env.GEMINI_API_KEY || '',
   groqApiKey: process.env.GROQ_API_KEY || '',
   openaiApiKey: process.env.OPENAI_API_KEY || '',
-  aiModel: process.env.AI_MODEL || 'meta-llama/llama-3.3-70b-instruct',
+  aiModel: process.env.AI_MODEL || 'google/gemini-2.5-flash',
   commandPrefix: (process.env.COMMAND_PREFIX || '!ai').toLowerCase(),
   wakeWords: (process.env.WAKE_WORDS || 'assistant,bot,ai')
     .split(',')

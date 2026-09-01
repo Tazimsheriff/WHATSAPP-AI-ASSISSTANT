@@ -101,7 +101,7 @@ Guidelines:
           { role: 'user', content: `[${senderName}]: ${prompt}` }
         ];
 
-        const modelName = config.aiModel || 'google/gemini-2.0-flash-001';
+        const modelName = config.aiModel || 'google/gemini-2.5-flash';
         const completion = await this.openrouterClient.chat.completions.create({
           model: modelName,
           messages
@@ -309,7 +309,7 @@ Please provide a structured, easy-to-read summary of what was discussed, key hig
     if (this.openrouterClient) {
       try {
         const completion = await this.openrouterClient.chat.completions.create({
-          model: config.aiModel || 'google/gemini-2.0-flash-001',
+          model: config.aiModel || 'google/gemini-2.5-flash',
           messages: [{ role: 'user', content: prompt }]
         });
         const text = completion.choices[0]?.message?.content;
@@ -373,7 +373,7 @@ Rules:
     if (this.openrouterClient) {
       try {
         const completion = await this.openrouterClient.chat.completions.create({
-          model: config.aiModel || 'google/gemini-2.0-flash-001',
+          model: config.aiModel || 'google/gemini-2.5-flash',
           messages: [{ role: 'user', content: extractionPrompt }]
         });
         rawJsonText = completion.choices[0]?.message?.content || '';
