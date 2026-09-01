@@ -17,7 +17,7 @@ export const config = {
   autoReplyDms: process.env.AUTO_REPLY_DMS === 'true',
   respondOnTag: process.env.RESPOND_ON_TAG !== 'false',
   pairingPhoneNumber: process.env.PAIRING_PHONE_NUMBER?.replace(/[^0-9]/g, '') || '',
-  authFolder: 'auth_info_baileys',
+  authFolder: process.env.AUTH_FOLDER || 'auth_info_baileys',
   maxHistoryPerChat: 15,
   googleServiceAccountKeyFile: process.env.GOOGLE_SERVICE_ACCOUNT_KEY_FILE || '',
   googleServiceAccountEmail: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || '',
