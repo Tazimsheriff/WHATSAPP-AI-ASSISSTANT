@@ -617,6 +617,63 @@ Guidelines:
 
     return '⚠️ Could not analyze image. Please ensure your AI API key is configured with vision support.';
   }
+
+  /**
+   * Fetches remaining OpenRouter credit balance and usage stats
+   */
+  public async getOpenRouterCredits(): Promise<string> {
+    if (!config.openrouterApiKey) {
+      return '⚠️ No OPENROUTER_API_KEY configured.';
+    }
+
+    try {
+      const res = await fetch('https://openrouter.ai/api/v1/credits', {
+        headers: {
+          Authorization: `Bearer ${config.openrouterApiKey}`
+        }
+      });
+
+      if (res.ok) {
+        const json: any = await res.json();
+        const totalCredits = json.data?.total_credits ?? 0;
+        const totalUsage = json.data?.total_usage ?? 0;
+        const remaining = Math.max(0, totalCredits - totalUsage);
+
+        let msg = `💳 *OpenRouter Credits & Usage:*\n\n`;
+        msg += `• *Total Credits Purchased:* \`$${Number(totalCredits).toFixed(2)}\`\n`;
+        msg += `• *Total Usage:* \`$${Number(totalUsage).toFixed(4)}\`\n`;
+        msg += `• *Remaining Balance:* \`$${Number(remaining).toFixed(4)}\` 💰\n\n`;
+        msg += `🔗 _Manage credits: https://openrouter.ai/credits_`;
+        return msg;
+      }
+
+      // Fallback to /auth/key
+      const keyRes = await fetch('https://openrouter.ai/api/v1/auth/key', {
+        headers: {
+          Authorization: `Bearer ${config.openrouterApiKey}`
+        }
+      });
+      if (keyRes.ok) {
+        const keyData: any = await keyRes.json();
+        const usage = keyData.data?.usage ?? 0;
+        const limit = keyData.data?.limit;
+        const label = keyData.data?.label || 'Primary Key';
+        let msg = `💳 *OpenRouter Key Status:*\n\n`;
+        msg += `• *Label:* \`${label}\`\n`;
+        msg += `• *Key Usage:* \`$${Number(usage).toFixed(4)}\`\n`;
+        if (limit !== null && limit !== undefined) {
+          msg += `• *Key Limit:* \`$${Number(limit).toFixed(2)}\`\n`;
+          msg += `• *Remaining:* \`$${Math.max(0, limit - usage).toFixed(4)}\`\n`;
+        }
+        return msg;
+      }
+
+      return `⚠️ Could not fetch OpenRouter credits (Status: ${res.status}).`;
+    } catch (err: any) {
+      logger.error({ err }, 'Failed to fetch OpenRouter credits');
+      return `⚠️ Error fetching OpenRouter credits: ${err.message || 'Unknown error'}`;
+    }
+  }
 }
 
 export const aiService = new AIService();

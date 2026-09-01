@@ -164,6 +164,25 @@ export class MessageHandler {
         return;
       }
 
+      // OpenRouter Credits & Balance Command: !credits, !balance, !usage
+      if (
+        lowerText === '!credits' ||
+        lowerText === '!credit' ||
+        lowerText === '!balance' ||
+        lowerText === '!usage' ||
+        lowerText === `${config.commandPrefix} credits` ||
+        lowerText === `${config.commandPrefix} balance`
+      ) {
+        if (!isOwner) {
+          await sock.sendMessage(chatId, { text: '⛔ *Access Denied:* Only the bot owner (Tazim) can view API credit balances.' }, { quoted: msg });
+          return;
+        }
+        await sock.sendMessage(chatId, { text: '⏳ *Checking OpenRouter credit balance...*' }, { quoted: msg });
+        const creditInfo = await aiService.getOpenRouterCredits();
+        await sock.sendMessage(chatId, { text: creditInfo }, { quoted: msg });
+        return;
+      }
+
       if (
         lowerText === '!permissions' ||
         lowerText === '!access' ||
@@ -1232,7 +1251,8 @@ _Created & Developed by Tazim_
 • \`!invite / !link\` : Group invite link
 • \`!summarize [n]\` : Summarize last [n] messages
 
-⚙️ *Settings:*
+⚙️ *Settings & Status:*
+• \`!credits\` / \`!balance\` : Check remaining OpenRouter credit balance
 • \`!autoreply on / off\` : Toggle auto-answering DMs
 • \`!ping\` : Bot connection & model status`;
   }
