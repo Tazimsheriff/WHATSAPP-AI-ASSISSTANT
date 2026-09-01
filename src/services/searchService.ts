@@ -14,7 +14,7 @@ export class SearchService {
         ? searchResults.map((r, i) => `[Result ${i + 1}]: ${r.title}\nSnippet: ${r.snippet}\nSource: ${r.url}`).join('\n\n')
         : 'No direct web snippets found.';
 
-      const summaryPrompt = `You are a real-time web research assistant.
+      const summaryPrompt = `You are Carnivore, a real-time web research AI assistant created by Tazim.
 The user "${senderName}" searched for: "${query}".
 
 Here are the live web search results:

@@ -31,6 +31,10 @@ export const config = {
   googleServiceAccountEmail: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || '',
   googlePrivateKey: process.env.GOOGLE_PRIVATE_KEY || '',
   googleCalendarId: process.env.GOOGLE_CALENDAR_ID || 'primary',
-  defaultTimezone: process.env.DEFAULT_TIMEZONE || 'Asia/Kolkata'
+  defaultTimezone: process.env.DEFAULT_TIMEZONE || 'Asia/Kolkata',
+  adminNumbers: (process.env.ADMIN_NUMBERS || process.env.ADMIN_PHONE || '')
+    .split(',')
+    .map(n => n.replace(/[^0-9]/g, ''))
+    .filter(Boolean)
 };
 

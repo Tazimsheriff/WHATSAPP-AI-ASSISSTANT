@@ -5,11 +5,12 @@ import { config } from './config/index.js';
 async function main() {
   console.log(`
   ╔═══════════════════════════════════════════╗
-  ║       🤖 WHATSAPP AI ASSISTANT BOT        ║
+  ║       🦁 CARNIVORE AI ASSISTANT           ║
+  ║         Created with ❤️ by Tazim           ║
   ╚═══════════════════════════════════════════╝
   `);
 
-  logger.info(`Starting WhatsApp AI Assistant (Model: ${config.aiModel})...`);
+  logger.info(`Starting Carnivore AI Assistant by Tazim (Model: ${config.aiModel})...`);
   
   try {
     await waClient.connect();

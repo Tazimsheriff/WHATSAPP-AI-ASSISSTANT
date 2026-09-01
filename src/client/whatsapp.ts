@@ -91,12 +91,13 @@ export class WhatsAppClient {
           logger.error('Device logged out. Please delete auth_info_baileys folder and restart to scan new QR / code.');
         }
       } else if (connection === 'open') {
-        logger.info('🚀 Successfully connected to WhatsApp! AI Assistant is now online.');
+        logger.info('🚀 Successfully connected to WhatsApp! Carnivore AI is now online.');
         reminderService.init(() => this.sock);
         const userJid = this.sock?.user?.id;
         const userName = this.sock?.user?.name;
         console.log('\n=============================================');
-        console.log(`✅ Logged in as: ${userName || 'User'} (${userJid?.split(':')[0] || 'Unknown'})`);
+        console.log(`🦁 Logged in as: Carnivore (${userName || 'User'}) (${userJid?.split(':')[0] || 'Unknown'})`);
+        console.log(`👤 Creator: Tazim`);
         console.log(`🤖 AI Trigger: ${config.commandPrefix} or mention in groups`);
         console.log(`🎙️ Voice Note Transcription: ${config.autoTranscribeAudio ? 'Active' : 'Disabled'}`);
         console.log('⏰ Background Reminders: Active');

@@ -1,11 +1,14 @@
-# 🤖 WhatsApp AI Executive Assistant
+# 🦁 Carnivore – WhatsApp AI Assistant
+> **Created & Developed with ❤️ by Tazim**
 
-An enterprise-grade, multi-device WhatsApp AI Assistant and Executive Productivity suite that runs directly on your WhatsApp account. Features multimodal AI vision, long-term memory, proactive scheduled reminders, real-time web search, receipt & expense ledger tracking, voice note transcription & speech generation, PDF/document intelligence, Google Calendar scheduling, and group administration.
+An enterprise-grade, multi-device WhatsApp AI Assistant and Executive Productivity suite named **Carnivore**, created by **Tazim**, that runs directly on your WhatsApp account. Features multimodal AI vision, long-term memory, proactive scheduled reminders, real-time web search, receipt & expense ledger tracking, voice note transcription & speech generation, PDF/document intelligence, Google Calendar scheduling, group administration, and master kill-switch & member access control.
 
 ---
 
 ## ✨ Full Feature Overview
 
+- 🛑 **Master Kill Switch**: Instantly pause/halt the entire AI assistant anytime (`!kill`, `!resume`, `!status`). Only the owner can reactivate it.
+- 🛡️ **Granular Member Access Control**: Restrict AI usage to specific whitelisted members, group admins only, block specific users, or toggle chat-level AI access (`!allow @user`, `!block @user`, `!members <mode>`, `!chat on/off`).
 - 🧠 **Long-Term Memory Engine**: Automatically remembers personal facts, preferences, dates, and instructions across chats (`!remember`, `!memories`, `!forget`).
 - ⏰ **Proactive Scheduled Reminders**: Set natural language reminders (`!remind in 30 mins to take medicine`, `!remind tomorrow 9am to call client`). Proactively alerts you on WhatsApp!
 - 🌐 **Real-Time Web Search**: Fetch live news, scores, stock prices, and weather (`!search latest AI breakthrough`).
@@ -16,11 +19,28 @@ An enterprise-grade, multi-device WhatsApp AI Assistant and Executive Productivi
 - 📸 **Multimodal Vision**: Send or quote photos with questions (`!ai what is this?`, `review this`, `solve this`).
 - 📅 **Google Meet & Calendar**: Natural language meeting scheduler (`!meet Tomorrow 3 PM with client@gmail.com`).
 - 🛡️ **Group Moderation & Community Manager**: Moderation tools (`!kick`, `!add`, `!promote`, `!demote`, `!invite`, `!summarize`).
-- 💾 **Volume-backed Persistence**: Database and session keys persist across Railway and Docker restarts.
+- 💾 **Volume-backed Persistence**: Database, settings, and session keys persist across Railway and Docker restarts.
 
 ---
 
 ## 💬 Command Reference
+
+### 🛑 Kill Switch & Master Control (Owner Only)
+| Command | Description | Example |
+|---|---|---|
+| `!kill` / `!pause` / `!ai off` | Completely turns OFF all AI features | `!kill` |
+| `!resume` / `!start` / `!ai on` | Resumes AI features back to ONLINE | `!resume` |
+| `!status` / `!aistatus` | View Kill Switch, member mode & active counts | `!status` |
+
+### 🛡️ Member Access Control & Permissions
+| Command | Description | Example |
+|---|---|---|
+| `!allow @user` / `!whitelist @user` | Allow / whitelist user to use AI | `!allow @919876543210` or `!allow +919876543210` |
+| `!block @user` / `!deny @user` | Disallow / block user from using AI | `!block @919876543210` |
+| `!unblock @user` | Remove user from block list | `!unblock @919876543210` |
+| `!members <mode>` | Set access mode (`all`, `whitelist`, `admins`, `off`) | `!members whitelist` or `!members admins` |
+| `!chat on / off` | Toggle AI in the current chat/group | `!chat off` |
+| `!permissions` / `!access` | View full whitelist, blocklist & active settings | `!permissions` |
 
 ### 🧠 Long-Term Memory
 | Command | Description | Example |

@@ -85,7 +85,7 @@ export class DocumentService {
         ? userPrompt
         : 'Provide a structured summary of this document, including key takeaways, important details, and action points.';
 
-      const prompt = `You are an AI document analysis assistant.
+      const prompt = `You are Carnivore, an AI document analysis assistant created by Tazim.
 Document Name: "${documentInfo.fileName}"
 Sender: "${senderName}"
 

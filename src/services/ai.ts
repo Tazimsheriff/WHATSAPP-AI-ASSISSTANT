@@ -84,8 +84,13 @@ export class AIService {
 
     const memoryContext = memoryService.getMemoryPromptContext(chatId);
 
-    const systemInstruction = `You are a smart, helpful, and concise AI WhatsApp Assistant.
+    const systemInstruction = `You are Carnivore, a smart, witty, and powerful AI WhatsApp assistant created and built by Tazim.
 You are running directly inside WhatsApp ${isGroup ? `in a group chat called "${groupSubject || 'Group'}"` : 'in a direct message'}.
+Your identity:
+- Name: Carnivore
+- Creator & Developer: Tazim
+- Persona: Sharp, highly capable, intelligent, helpful, and polite.
+- Whenever someone asks who you are, what your name is, or who built/created you, clearly state that you are Carnivore, an AI assistant created by Tazim.
 Guidelines:
 - Format your output nicely using WhatsApp markdown (*bold*, _italic_, ~strikethrough~, \`monospace\`, bullet points).
 - Keep replies conversational, concise, and helpful (mobile screen friendly).
@@ -121,7 +126,7 @@ Guidelines:
 
         const reply = completion.choices[0]?.message?.content || 'No response generated.';
         this.appendToHistory(chatId, { role: 'user', content: prompt, senderName });
-        this.appendToHistory(chatId, { role: 'assistant', content: reply, senderName: 'Assistant' });
+        this.appendToHistory(chatId, { role: 'assistant', content: reply, senderName: 'Carnivore' });
         return reply.trim();
       } catch (err: any) {
         logger.error({ err }, 'Error calling OpenRouter API for reply');
@@ -154,7 +159,7 @@ Guidelines:
         const responseText = result.response.text();
 
         this.appendToHistory(chatId, { role: 'user', content: prompt, senderName });
-        this.appendToHistory(chatId, { role: 'model', content: responseText, senderName: 'Assistant' });
+        this.appendToHistory(chatId, { role: 'model', content: responseText, senderName: 'Carnivore' });
 
         return responseText.trim();
       } catch (err: any) {
@@ -186,7 +191,7 @@ Guidelines:
 
         const reply = completion.choices[0]?.message?.content || 'No response generated.';
         this.appendToHistory(chatId, { role: 'user', content: prompt, senderName });
-        this.appendToHistory(chatId, { role: 'assistant', content: reply, senderName: 'Assistant' });
+        this.appendToHistory(chatId, { role: 'assistant', content: reply, senderName: 'Carnivore' });
         return reply.trim();
       } catch (err: any) {
         logger.error({ err }, 'Error calling OpenAI/Groq API for reply');
@@ -509,7 +514,7 @@ Rules:
     const base64Image = imageBuffer.toString('base64');
     const userPrompt = prompt?.trim() || 'Please review and describe this image in detail. Highlight all important elements, text, objects, and key insights.';
 
-    const systemInstruction = `You are a vision-capable AI WhatsApp Assistant.
+    const systemInstruction = `You are Carnivore, a vision-capable AI WhatsApp Assistant created and built by Tazim.
 Analyze the user's provided image carefully and provide a helpful, accurate, and insightful response.
 Guidelines:
 - If the user asks a specific question about the image, directly and thoroughly answer it.
