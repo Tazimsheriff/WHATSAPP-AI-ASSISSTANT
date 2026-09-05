@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
-    "build": "tsc"
+    "build": "tsc",
+    "clean:auth": "node scripts/cleanAuth.js"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.0",

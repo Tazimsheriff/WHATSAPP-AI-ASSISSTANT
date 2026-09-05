@@ -1,4 +1,3 @@
-import fs from 'fs';
 import makeWASocket, {
   Browsers,
   DisconnectReason,
@@ -92,15 +91,7 @@ export class WhatsAppClient {
           logger.info('Reconnecting to WhatsApp in 3 seconds...');
           setTimeout(() => this.connect(), 3000);
         } else {
-          logger.error('Device logged out. Automatically clearing stale credentials. Please restart to pair again.');
-          try {
-            if (fs.existsSync(config.authFolder)) {
-              fs.rmSync(config.authFolder, { recursive: true, force: true });
-              logger.info(`Cleared stale auth folder: ${config.authFolder}`);
-            }
-          } catch (e: any) {
-            logger.error({ err: e?.message }, 'Failed to clear auth folder');
-          }
+          logger.error('Device logged out (401). To reconnect, run `npm run clean:auth` and then `npm start` to generate a fresh pairing code.');
         }
       } else if (connection === 'open') {
         logger.info('🚀 Successfully connected to WhatsApp! Carnivore AI is now online.');
