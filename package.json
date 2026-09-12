@@ -16,6 +16,7 @@
     "google-tts-api": "^2.0.2",
     "googleapis": "^178.0.0",
     "node-cron": "^4.6.0",
+    "nodemailer": "^10.0.9",
     "openai": "^4.86.1",
     "pdf-parse": "^2.4.5",
     "pino": "^9.6.0",
@@ -26,6 +27,7 @@
   "devDependencies": {
     "@types/node": "^22.13.9",
     "@types/node-cron": "^3.0.11",
+    "@types/nodemailer": "^8.0.1",
     "@types/pdf-parse": "^1.1.5",
     "@types/qrcode-terminal": "^0.12.2",
     "typescript": "^5.8.2"
