@@ -37,6 +37,13 @@ export const config = {
   adminNumbers: (process.env.ADMIN_NUMBERS || process.env.ADMIN_PHONE || '')
     .split(',')
     .map(n => n.replace(/[^0-9]/g, ''))
-    .filter(Boolean)
+    .filter(Boolean),
+  // SMTP Email Configuration
+  smtpHost: (process.env.SMTP_HOST || '').trim(),
+  smtpPort: parseInt(process.env.SMTP_PORT || '587', 10),
+  smtpSecure: process.env.SMTP_SECURE === 'true' || process.env.SMTP_PORT === '465',
+  smtpUser: (process.env.SMTP_USER || '').trim(),
+  smtpPass: (process.env.SMTP_PASS || process.env.SMTP_PASSWORD || '').trim(),
+  smtpFrom: (process.env.SMTP_FROM || process.env.SMTP_USER || '').trim()
 };
 

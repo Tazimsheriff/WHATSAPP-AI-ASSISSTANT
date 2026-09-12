@@ -11,6 +11,7 @@ import { documentService } from '../services/documentService.js';
 import { expenseService } from '../services/expenseService.js';
 import { ttsService } from '../services/ttsService.js';
 import { imageGenService } from '../services/imageGenService.js';
+import { emailService } from '../services/emailService.js';
 import { logger } from '../utils/logger.js';
 
 // Message buffer per chat for summarization and context
@@ -71,7 +72,7 @@ export class MessageHandler {
 
       // Loop & Echo Prevention:
       // If fromMe and NOT self-chat, ignore messages without an explicit '!' prefix (to not interfere when texting friends)
-      if (isFromMe && !isSelfChat && !textContent.startsWith('!') && !textContent.startsWith(config.commandPrefix)) {
+      if (isFromMe && !isSelfChat && !textContent.startsWith('!') && !textContent.startsWith(config.commandPrefix) && !this.isEmailIntent(textContent)) {
         return;
       }
 
@@ -758,6 +759,40 @@ export class MessageHandler {
         return;
       }
 
+      // Automated Email Command or Natural Language Intent:
+      // Works in ALL chats: Self-chat, Direct Messages from others, Groups, and 1-on-1 chats!
+      if (
+        this.isEmailIntent(trimmedText) ||
+        lowerText.startsWith('!mail') ||
+        lowerText.startsWith('!email') ||
+        lowerText.startsWith('!sendmail') ||
+        lowerText.startsWith('!sendemail') ||
+        lowerText.startsWith(`${config.commandPrefix} mail`) ||
+        lowerText.startsWith(`${config.commandPrefix} email`)
+      ) {
+        let emailPrompt = trimmedText
+          .replace(/^!(mail|email|sendmail|sendemail)\s*/i, '')
+          .replace(new RegExp(`^${config.commandPrefix}\\s*(mail|email|sendmail|sendemail)\\s*`, 'i'), '')
+          .trim();
+
+        if (!emailPrompt) {
+          await sock.sendMessage(
+            chatId,
+            {
+              text: `📧 *Automated Email Sender Usage:*\n\nExample:\n• \`!mail to test@example.com telling them the project is ready\`\n• \`send a mail to client@company.com with the invoice details\`\n\nI will automatically extract the recipient, compose a professional message, and dispatch the email via SMTP!`
+            },
+            { quoted: msg }
+          );
+          return;
+        }
+
+        logger.info({ chatId, senderName, prompt: emailPrompt }, 'Processing email dispatch command / intent');
+        await sock.sendMessage(chatId, { text: '⏳ *Composing email and sending via SMTP...*' }, { quoted: msg });
+        const reply = await aiService.handleEmailSending(emailPrompt, senderName);
+        await sock.sendMessage(chatId, { text: reply }, { quoted: msg });
+        return;
+      }
+
       // Explicit Meeting Command: !meet ... or !schedule ...
       if (
         lowerText.startsWith('!meet') ||
@@ -910,6 +945,15 @@ export class MessageHandler {
           return;
         }
 
+        // Check if prompt is an email dispatch request
+        if (this.isEmailIntent(prompt)) {
+          logger.info({ chatId, senderName, prompt }, 'Detected email dispatch intent in AI prompt');
+          await sock.sendMessage(chatId, { text: '⏳ *Composing email and sending via SMTP...*' }, { quoted: msg });
+          const reply = await aiService.handleEmailSending(prompt, senderName);
+          await sock.sendMessage(chatId, { text: reply }, { quoted: msg });
+          return;
+        }
+
         logger.info({ chatId, senderName, prompt }, 'Processing AI command');
         const reply = await aiService.generateReply(chatId, prompt, senderName, isGroup);
         await sock.sendMessage(chatId, { text: reply }, { quoted: msg });
@@ -965,6 +1009,14 @@ export class MessageHandler {
           return;
         }
 
+        if (this.isEmailIntent(cleanedPrompt)) {
+          logger.info({ chatId, senderName, prompt: cleanedPrompt }, 'Responding to tagged email dispatch intent');
+          await sock.sendMessage(chatId, { text: '⏳ *Composing email and sending via SMTP...*' }, { quoted: msg });
+          const reply = await aiService.handleEmailSending(cleanedPrompt, senderName);
+          await sock.sendMessage(chatId, { text: reply }, { quoted: msg });
+          return;
+        }
+
         logger.info({ chatId, senderName, prompt: cleanedPrompt }, 'Responding to tag / mention / wake word');
         const reply = await aiService.generateReply(chatId, cleanedPrompt, senderName, isGroup);
         await sock.sendMessage(chatId, { text: reply }, { quoted: msg });
@@ -973,6 +1025,13 @@ export class MessageHandler {
 
       // Safe Direct Message Auto-Reply (Only active if autoReplyDms is explicitly turned ON)
       if (!isGroup && botSettings.autoReplyDms && !isFromMe) {
+        if (this.isEmailIntent(trimmedText)) {
+          logger.info({ chatId, senderName, prompt: trimmedText }, 'Auto-replying to email dispatch request in DM');
+          await sock.sendMessage(chatId, { text: '⏳ *Composing email and sending via SMTP...*' }, { quoted: msg });
+          const reply = await aiService.handleEmailSending(trimmedText, senderName);
+          await sock.sendMessage(chatId, { text: reply }, { quoted: msg });
+          return;
+        }
         logger.info({ chatId, senderName }, 'Auto-replying to direct message (autoReplyDms is ON)');
         const reply = await aiService.generateReply(chatId, trimmedText, senderName, false);
         await sock.sendMessage(chatId, { text: reply }, { quoted: msg });
@@ -981,6 +1040,13 @@ export class MessageHandler {
 
       // Self-Chat Natural Conversation (In Message Yourself, respond to any question directly!)
       if (isSelfChat && trimmedText && !trimmedText.startsWith('!')) {
+        if (this.isEmailIntent(trimmedText)) {
+          logger.info({ chatId, senderName, prompt: trimmedText }, 'Processing self-chat email dispatch intent');
+          await sock.sendMessage(chatId, { text: '⏳ *Composing email and sending via SMTP...*' });
+          const reply = await aiService.handleEmailSending(trimmedText, senderName);
+          await sock.sendMessage(chatId, { text: reply });
+          return;
+        }
         logger.info({ chatId, senderName, prompt: trimmedText }, 'Processing self-chat natural conversation');
         const reply = await aiService.generateReply(chatId, trimmedText, senderName, false);
         await sock.sendMessage(chatId, { text: reply });
@@ -1230,6 +1296,36 @@ export class MessageHandler {
     return meetingKeywords.some(kw => lower.includes(kw));
   }
 
+  private isEmailIntent(text: string): boolean {
+    const lower = text.toLowerCase().trim();
+    if (
+      lower.startsWith('!mail') ||
+      lower.startsWith('!email') ||
+      lower.startsWith('!sendmail') ||
+      lower.startsWith('!sendemail') ||
+      lower.startsWith(`${config.commandPrefix} mail`) ||
+      lower.startsWith(`${config.commandPrefix} email`) ||
+      lower.startsWith(`${config.commandPrefix} sendmail`) ||
+      lower.startsWith(`${config.commandPrefix} sendemail`)
+    ) {
+      return true;
+    }
+
+    const hasEmail = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/.test(text);
+    const mentionsSelf = lower.includes('to myself') || lower.includes('to me') || lower.includes('to self');
+    if (!hasEmail && !mentionsSelf) {
+      return false;
+    }
+
+    // Match phrases like "send a mail", "send the email", "shoot an e-mail", "write mail"
+    const emailIntentRegex = /\b(send|shoot|write|draft|dispatch|forward|drop)\b.*\b(email|mail|e-mail)\b/i;
+    if (emailIntentRegex.test(lower) || lower.includes('email to') || lower.includes('mail to')) {
+      return true;
+    }
+
+    return false;
+  }
+
   public registerBotMessageId(id: string): void {
     botSentMessageIds.add(id);
     if (botSentMessageIds.size > 500) {
@@ -1285,6 +1381,11 @@ _Created & Developed by Tazim_
 📄 *Document & PDF Intelligence:*
 • *Send PDF / CSV / Doc* : AI reads, summarizes, and answers questions
 
+📧 *Automated Email Dispatch (SMTP):*
+• \`!mail to <email> <details>\` : AI composes & dispatches email
+• \`!email <email> <details>\` : e.g. \`!mail to test@example.com telling them the project is ready\`
+• *Natural Chat* : "send a mail to test@example.com that our deployment succeeded"
+
 📅 *Google Meet & Calendar:*
 • \`!meet <details>\` : Schedule event & generate Meet link
 
@@ -1303,3 +1404,4 @@ _Created & Developed by Tazim_
 }
 
 export const messageHandler = new MessageHandler();
+

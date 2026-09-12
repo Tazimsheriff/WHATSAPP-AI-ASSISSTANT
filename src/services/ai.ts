@@ -1,6 +1,7 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import OpenAI from 'openai';
 import { calendarService, MeetingResult } from './calendar.js';
+import { emailService } from './emailService.js';
 import { memoryService } from './memoryService.js';
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
@@ -544,6 +545,134 @@ Rules:
     }
 
     return msg;
+  }
+
+  /**
+   * Intelligently parses natural language email instructions, extracts recipient,
+   * infers subject, composes email body, sends email via emailService, and returns
+   * a structured WhatsApp confirmation message.
+   */
+  public async handleEmailSending(prompt: string, senderName: string = 'User'): Promise<string> {
+    const extractionPrompt = `You are an automated AI email dispatch assistant.
+A user sent this message via WhatsApp requesting to send an email:
+"${prompt}"
+
+Sender / Requester Name: ${senderName}
+
+Task:
+1. Extract the recipient email address ("recipient").
+2. Infer an appropriate, professional, and concise subject line ("subject").
+3. Compose a polite, clear, and complete email body ("body") based on the user's intent. Do not include placeholder brackets like [Your Name], sign off naturally using "${senderName}".
+
+Return ONLY a single valid JSON object (no markdown formatting, no code blocks, no backticks, no explanation):
+{
+  "recipient": "example@email.com",
+  "subject": "Clear Subject Line",
+  "body": "Well-written email text here"
+}`;
+
+    let rawJsonText = '';
+
+    // 1. Try OpenRouter
+    if (this.openrouterClient) {
+      try {
+        const completion = await this.openrouterClient.chat.completions.create({
+          model: config.aiModel || 'google/gemini-2.5-flash',
+          messages: [{ role: 'user', content: extractionPrompt }]
+        });
+        rawJsonText = completion.choices[0]?.message?.content || '';
+      } catch (err: any) {
+        logger.error({ err }, 'OpenRouter error during email intent extraction');
+      }
+    }
+
+    // 2. Try Gemini
+    if (!rawJsonText && this.geminiClient) {
+      try {
+        const model = this.geminiClient.getGenerativeModel({ model: 'gemini-2.0-flash' });
+        const result = await model.generateContent(extractionPrompt);
+        rawJsonText = result.response.text();
+      } catch (err: any) {
+        logger.error({ err }, 'Gemini error during email intent extraction');
+      }
+    }
+
+    // 3. Try NVIDIA / Groq / OpenAI fallback
+    const fallbackClient = this.nvidiaClient || this.groqClient || this.openaiClient;
+    if (!rawJsonText && fallbackClient) {
+      try {
+        const modelName = this.nvidiaClient
+          ? (config.aiModel || 'nvidia/llama-3.1-nemotron-70b-instruct')
+          : (this.groqClient ? 'llama-3.3-70b-versatile' : 'gpt-4o-mini');
+        const completion = await fallbackClient.chat.completions.create({
+          model: modelName,
+          messages: [{ role: 'user', content: extractionPrompt }]
+        });
+        rawJsonText = completion.choices[0]?.message?.content || '';
+      } catch (err: any) {
+        logger.error({ err }, 'Fallback error during email intent extraction');
+      }
+    }
+
+    try {
+      // Clean possible markdown backticks or json wrapper
+      const cleanJson = rawJsonText
+        .replace(/```json/gi, '')
+        .replace(/```/g, '')
+        .trim();
+
+      // Extract all email addresses found via regex in prompt
+      const allRegexEmails = Array.from(prompt.matchAll(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g)).map(m => m[0]);
+
+      let parsed: { recipient?: string; subject?: string; body?: string } = {};
+      if (cleanJson) {
+        try {
+          parsed = JSON.parse(cleanJson);
+        } catch {
+          const jsonMatch = cleanJson.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            try {
+              parsed = JSON.parse(jsonMatch[0]);
+            } catch {}
+          }
+        }
+      }
+
+      // Determine recipient cleanly:
+      let recipient = (parsed.recipient || '').trim().replace(/[<>]/g, '').replace(/\.+$/, '');
+      const isPlaceholder =
+        recipient === 'example@email.com' ||
+        recipient === 'user@example.com' ||
+        recipient.startsWith('<') ||
+        recipient.includes('placeholder');
+
+      if (!recipient || isPlaceholder || !emailService.isValidEmail(recipient)) {
+        if (allRegexEmails.length > 0) {
+          recipient = allRegexEmails.join(', ');
+        } else if (/\b(myself|me|self)\b/i.test(prompt)) {
+          recipient = config.smtpUser;
+        }
+      }
+
+      if (!recipient) {
+        return '⚠️ *Could not detect recipient email address.* Please specify a valid email (e.g. `!mail to test@example.com telling them the project is ready`).';
+      }
+
+      const subject = (parsed.subject || 'Message from WhatsApp AI Assistant').trim();
+      const body = (parsed.body || prompt).trim();
+
+      logger.info({ recipient, subject, senderName }, 'Dispatching email parsed by AI');
+      const sendResult = await emailService.sendEmail({
+        to: recipient,
+        subject,
+        body
+      });
+
+      return emailService.formatEmailConfirmation(sendResult);
+    } catch (parseErr: any) {
+      logger.error({ parseErr, rawJsonText }, 'Failed to parse and process email details');
+      return `⚠️ I couldn't process your email request. Please verify the recipient email and try again (e.g. \`!mail to test@example.com telling them the project is ready\`).`;
+    }
   }
 
   /**
