@@ -16,6 +16,7 @@ export const config = {
   geminiApiKey: (process.env.GEMINI_API_KEY || '').trim().replace(/[\r\n\t]/g, ''),
   groqApiKey: (process.env.GROQ_API_KEY || '').trim().replace(/[\r\n\t]/g, ''),
   openaiApiKey: (process.env.OPENAI_API_KEY || '').trim().replace(/[\r\n\t]/g, ''),
+  nvidiaApiKey: (process.env.NVIDIA_API_KEY || '').trim().replace(/[\r\n\t]/g, ''),
   aiModel: sanitizeModel(process.env.AI_MODEL),
   commandPrefix: (process.env.COMMAND_PREFIX || '!ai').trim().toLowerCase(),
   wakeWords: (process.env.WAKE_WORDS || 'assistant,bot,ai')

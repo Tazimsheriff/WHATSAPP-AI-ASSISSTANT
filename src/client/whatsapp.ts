@@ -45,6 +45,40 @@ export class WhatsAppClient {
       }
     });
 
+    // Wrap sendMessage to intercept @lid routing, strip quotes for self chat, and track sent IDs
+    const rawSendMessage = this.sock.sendMessage.bind(this.sock);
+    this.sock.sendMessage = async (jid: string, content: any, options?: any) => {
+      let target = jid;
+      const myPhone = config.pairingPhoneNumber || (this.sock?.user?.id ? this.sock.user.id.split(':')[0].replace(/[^0-9]/g, '') : '');
+      const myLid = this.sock?.user?.lid ? this.sock.user.lid.split(':')[0].replace(/[^0-9]/g, '') : '';
+
+      // If target is LID or self, route to standard phone JID
+      if (target.endsWith('@lid') && myPhone) {
+        if (!myLid || target.includes(myLid) || options?.quoted?.key?.fromMe) {
+          target = `${myPhone}@s.whatsapp.net`;
+        }
+      }
+
+      const isSelf = !!myPhone && target.includes(myPhone);
+
+      try {
+        const opts = isSelf ? { ...options, quoted: undefined } : options;
+        const res = await rawSendMessage(target, content, opts);
+        if (res?.key?.id) {
+          messageHandler.registerBotMessageId(res.key.id);
+        }
+        return res;
+      } catch (err: any) {
+        logger.warn({ err: err?.message || err, target }, 'Failed to send message with options, falling back without quote');
+        const fallbackOpts = { ...options, quoted: undefined };
+        const res = await rawSendMessage(target, content, fallbackOpts);
+        if (res?.key?.id) {
+          messageHandler.registerBotMessageId(res.key.id);
+        }
+        return res;
+      }
+    };
+
     // If pairing phone number is set and device is not registered yet, request pairing code
     if (config.pairingPhoneNumber && !state.creds.registered) {
       setTimeout(async () => {

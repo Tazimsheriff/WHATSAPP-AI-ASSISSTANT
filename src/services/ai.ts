@@ -19,6 +19,7 @@ export class AIService {
   private geminiClient: GoogleGenerativeAI | null = null;
   private openaiClient: OpenAI | null = null;
   private groqClient: OpenAI | null = null;
+  private nvidiaClient: OpenAI | null = null;
 
   constructor() {
     if (config.openrouterApiKey) {
@@ -49,9 +50,16 @@ export class AIService {
       });
       logger.info('OpenAI Provider initialized');
     }
+    if (config.nvidiaApiKey) {
+      this.nvidiaClient = new OpenAI({
+        apiKey: config.nvidiaApiKey,
+        baseURL: 'https://integrate.api.nvidia.com/v1'
+      });
+      logger.info('NVIDIA NIM Provider initialized');
+    }
 
-    if (!config.openrouterApiKey && !config.geminiApiKey && !config.groqApiKey && !config.openaiApiKey) {
-      logger.warn('No AI API key found! Please set OPENROUTER_API_KEY or GEMINI_API_KEY in your .env file.');
+    if (!config.openrouterApiKey && !config.geminiApiKey && !config.groqApiKey && !config.openaiApiKey && !config.nvidiaApiKey) {
+      logger.warn('No AI API key found! Please set NVIDIA_API_KEY, OPENROUTER_API_KEY, or GEMINI_API_KEY in your .env file.');
     }
   }
 
@@ -130,17 +138,52 @@ Guidelines:
         return reply.trim();
       } catch (err: any) {
         logger.error({ err }, 'Error calling OpenRouter API for reply');
-        if (!this.geminiClient && !this.groqClient && !this.openaiClient) {
+        if (!this.nvidiaClient && !this.geminiClient && !this.groqClient && !this.openaiClient) {
           return `⚠️ Error generating AI reply via OpenRouter: ${err.message || 'Unknown error'}`;
         }
       }
     }
 
-    // 2. Try Direct Gemini
+    // 2. Try NVIDIA NIM (if configured)
+    if (this.nvidiaClient) {
+      try {
+        const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+          { role: 'system', content: systemInstruction },
+          ...history.slice(-8).map(m => ({
+            role: (m.role === 'model' || m.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant',
+            content: `${m.senderName ? `[${m.senderName}]: ` : ''}${m.content}`
+          })),
+          { role: 'user', content: `[${senderName}]: ${prompt}` }
+        ];
+
+        const modelName = config.aiModel || 'nvidia/llama-3.1-nemotron-70b-instruct';
+        const completion = await this.nvidiaClient.chat.completions.create({
+          model: modelName,
+          messages,
+          temperature: 0.6,
+          top_p: 0.7,
+          max_tokens: 1024
+        });
+
+        const reply = completion.choices[0]?.message?.content || 'No response generated.';
+        this.appendToHistory(chatId, { role: 'user', content: prompt, senderName });
+        this.appendToHistory(chatId, { role: 'assistant', content: reply, senderName: 'Carnivore' });
+        return reply.trim();
+      } catch (err: any) {
+        logger.error({ err }, 'Error calling NVIDIA API for reply');
+        if (!this.geminiClient && !this.groqClient && !this.openaiClient) {
+          return `⚠️ Error generating AI reply via NVIDIA NIM: ${err.message || 'Unknown error'}`;
+        }
+      }
+    }
+
+    // 3. Try Direct Gemini
     if (this.geminiClient) {
       try {
+        const rawModel = config.aiModel || 'gemini-2.0-flash';
+        const geminiModel = rawModel.replace(/^(google|openai|anthropic|meta-llama)\//i, '');
         const model = this.geminiClient.getGenerativeModel({
-          model: config.aiModel || 'gemini-2.0-flash',
+          model: geminiModel,
           systemInstruction
         });
 
@@ -410,12 +453,15 @@ Rules:
       }
     }
 
-    // 3. Try Groq / OpenAI fallback
-    const fallbackClient = this.groqClient || this.openaiClient;
+    // 3. Try NVIDIA / Groq / OpenAI fallback
+    const fallbackClient = this.nvidiaClient || this.groqClient || this.openaiClient;
     if (!rawJsonText && fallbackClient) {
       try {
+        const modelName = this.nvidiaClient
+          ? (config.aiModel || 'nvidia/llama-3.1-nemotron-70b-instruct')
+          : (this.groqClient ? 'llama-3.3-70b-versatile' : 'gpt-4o-mini');
         const completion = await fallbackClient.chat.completions.create({
-          model: this.groqClient ? 'llama-3.3-70b-versatile' : 'gpt-4o-mini',
+          model: modelName,
           messages: [{ role: 'user', content: extractionPrompt }]
         });
         rawJsonText = completion.choices[0]?.message?.content || '';
@@ -559,7 +605,45 @@ Guidelines:
       }
     }
 
-    // 2. Try Gemini directly
+    // 2. Try NVIDIA NIM (supports meta/llama-3.2-11b-vision-instruct, etc.)
+    if (this.nvidiaClient) {
+      try {
+        const visionModel = config.aiModel.includes('vision')
+          ? config.aiModel
+          : 'meta/llama-3.2-11b-vision-instruct';
+
+        const completion = await this.nvidiaClient.chat.completions.create({
+          model: visionModel,
+          messages: [
+            { role: 'system', content: systemInstruction },
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: `[${senderName}]: ${userPrompt}` },
+                {
+                  type: 'image_url',
+                  image_url: {
+                    url: `data:${cleanMime};base64,${base64Image}`
+                  }
+                }
+              ]
+            }
+          ],
+          max_tokens: 1024
+        });
+
+        const reply = completion.choices[0]?.message?.content || 'Unable to analyze image.';
+        if (chatId) {
+          this.appendToHistory(chatId, { role: 'user', content: `[Sent Image] ${userPrompt}`, senderName });
+          this.appendToHistory(chatId, { role: 'assistant', content: reply, senderName: 'Carnivore' });
+        }
+        return reply.trim();
+      } catch (err: any) {
+        logger.error({ err }, 'Error analyzing image via NVIDIA NIM');
+      }
+    }
+
+    // 3. Try Gemini directly
     if (this.geminiClient) {
       try {
         const model = this.geminiClient.getGenerativeModel({ model: 'gemini-1.5-flash' });
