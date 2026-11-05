@@ -60,8 +60,8 @@ export class AIService {
     }
 
     if (!config.openrouterApiKey && !config.geminiApiKey && !config.groqApiKey && !config.openaiApiKey && !config.nvidiaApiKey) {
-      logger.warn('No AI API key found! Please set NVIDIA_API_KEY, OPENROUTER_API_KEY, or GEMINI_API_KEY in your .env file.');
-    }
+          logger.warn('No AI API key found! Please set NVIDIA_API_KEY, OPENROUTER_API_KEY, or GEMINI_API_KEY in your .env file.');
+        }
   }
 
   public getHistory(chatId: string): ChatMessage[] {
@@ -106,6 +106,36 @@ Guidelines:
 - When addressing users, be polite and natural.
 - You can answer questions, summarize text, assist with brainstorming, calculate, debug code, and more.${memoryContext}`;
 
+    // 0. Priority: If NVIDIA model is specified and nvidiaClient is configured
+    if (this.nvidiaClient && (config.aiModel.includes('deepseek') || config.aiModel.includes('nvidia'))) {
+      try {
+        const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+          { role: 'system', content: systemInstruction },
+          ...history.slice(-8).map(m => ({
+            role: (m.role === 'model' || m.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant',
+            content: `${m.senderName ? `[${m.senderName}]: ` : ''}${m.content}`
+          })),
+          { role: 'user', content: `[${senderName}]: ${prompt}` }
+        ];
+
+        const modelName = config.aiModel || 'deepseek-ai/deepseek-v4.1-flash';
+        const completion = await this.nvidiaClient.chat.completions.create({
+          model: modelName,
+          messages
+        });
+
+        const reply = completion.choices[0]?.message?.content || 'No response generated.';
+        this.appendToHistory(chatId, { role: 'user', content: prompt, senderName });
+        this.appendToHistory(chatId, { role: 'assistant', content: reply, senderName: 'Carnivore' });
+        return reply.trim();
+      } catch (err: any) {
+        logger.error({ err }, 'Error calling NVIDIA NIM API for reply');
+        if (!this.openrouterClient && !this.geminiClient && !this.groqClient && !this.openaiClient) {
+          return `⚠️ Error generating AI reply via NVIDIA NIM: ${err.message || 'Unknown error'}`;
+        }
+      }
+    }
+
     // 1. Try OpenRouter (if configured)
     if (this.openrouterClient) {
       try {
@@ -138,12 +168,12 @@ Guidelines:
         this.appendToHistory(chatId, { role: 'assistant', content: reply, senderName: 'Carnivore' });
         return reply.trim();
       } catch (err: any) {
-        logger.error({ err }, 'Error calling OpenRouter API for reply');
-        if (!this.nvidiaClient && !this.geminiClient && !this.groqClient && !this.openaiClient) {
-          return `⚠️ Error generating AI reply via OpenRouter: ${err.message || 'Unknown error'}`;
-        }
-      }
-    }
+              logger.error({ err }, 'Error calling OpenRouter API for reply');
+              if (!this.geminiClient && !this.groqClient && !this.openaiClient && !this.nvidiaClient) {
+                return `⚠️ Error generating AI reply via OpenRouter: ${err.message || 'Unknown error'}`;
+              }
+            }
+          }
 
     // 2. Try NVIDIA NIM (if configured)
     if (this.nvidiaClient) {
@@ -208,14 +238,14 @@ Guidelines:
         return responseText.trim();
       } catch (err: any) {
         logger.error({ err }, 'Error calling Gemini API for reply');
-        if (!this.groqClient && !this.openaiClient) {
+        if (!this.groqClient && !this.openaiClient && !this.nvidiaClient) {
           return `⚠️ Error generating AI reply: ${err.message || 'Unknown error'}`;
         }
       }
     }
 
-    // 3. Fallback to Groq / OpenAI
-    const fallbackClient = this.groqClient || this.openaiClient;
+    // 3. Fallback to Groq / OpenAI / NVIDIA NIM
+    const fallbackClient = this.groqClient || this.openaiClient || this.nvidiaClient;
     if (fallbackClient) {
       try {
         const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
@@ -227,7 +257,17 @@ Guidelines:
           { role: 'user', content: `[${senderName}]: ${prompt}` }
         ];
 
-        const modelName = this.groqClient ? 'llama-3.3-70b-versatile' : 'gpt-4o-mini';
+        let modelName = 'gpt-4o-mini';
+        if (this.groqClient) {
+          modelName = 'llama-3.3-70b-versatile';
+        } else if (this.openaiClient) {
+          modelName = 'gpt-4o-mini';
+        } else if (this.nvidiaClient) {
+          modelName = config.aiModel.includes('deepseek') || config.aiModel.includes('nvidia')
+            ? config.aiModel
+            : 'deepseek-ai/deepseek-v4.1-flash';
+        }
+
         const completion = await fallbackClient.chat.completions.create({
           model: modelName,
           messages
@@ -238,12 +278,12 @@ Guidelines:
         this.appendToHistory(chatId, { role: 'assistant', content: reply, senderName: 'Carnivore' });
         return reply.trim();
       } catch (err: any) {
-        logger.error({ err }, 'Error calling OpenAI/Groq API for reply');
+        logger.error({ err }, 'Error calling AI provider for reply');
         return `⚠️ Error generating AI reply: ${err.message || 'Unknown error'}`;
       }
     }
 
-    return '⚠️ No AI API key is configured. Please provide OPENROUTER_API_KEY or GEMINI_API_KEY in your .env file.';
+    return '⚠️ No AI API key is configured. Please provide OPENROUTER_API_KEY, GEMINI_API_KEY, or NVIDIA_API_KEY in your .env file.';
   }
 
   /**
@@ -390,6 +430,22 @@ Please provide a structured, easy-to-read summary of what was discussed, key hig
       }
     }
 
+    if (this.nvidiaClient) {
+      try {
+        const model = config.aiModel.includes('deepseek') || config.aiModel.includes('nvidia')
+          ? config.aiModel
+          : 'deepseek-ai/deepseek-v4.1-flash';
+        const completion = await this.nvidiaClient.chat.completions.create({
+          model,
+          messages: [{ role: 'user', content: prompt }]
+        });
+        const text = completion.choices[0]?.message?.content;
+        if (text) return text.trim();
+      } catch (err: any) {
+        logger.error({ err }, 'Error summarizing messages with NVIDIA NIM');
+      }
+    }
+
     return '⚠️ Summary unavailable. Please check your API key.';
   }
 
@@ -468,6 +524,22 @@ Rules:
         rawJsonText = completion.choices[0]?.message?.content || '';
       } catch (err: any) {
         logger.error({ err }, 'Fallback error during meeting intent extraction');
+      }
+    }
+
+    // 4. Try NVIDIA NIM fallback
+    if (!rawJsonText && this.nvidiaClient) {
+      try {
+        const model = config.aiModel.includes('deepseek') || config.aiModel.includes('nvidia')
+          ? config.aiModel
+          : 'deepseek-ai/deepseek-v4.1-flash';
+        const completion = await this.nvidiaClient.chat.completions.create({
+          model,
+          messages: [{ role: 'user', content: extractionPrompt }]
+        });
+        rawJsonText = completion.choices[0]?.message?.content || '';
+      } catch (err: any) {
+        logger.error({ err }, 'NVIDIA NIM error during meeting intent extraction');
       }
     }
 
@@ -697,6 +769,40 @@ Guidelines:
 - If the image contains text, diagrams, code, math, or handwriting, accurately read/explain it.
 - Format your response nicely using WhatsApp markdown (*bold*, _italic_, bullet points, \`code\`).`;
 
+    // 0. Priority: Try NVIDIA NIM if model specified
+    if (this.nvidiaClient && (config.aiModel.includes('deepseek') || config.aiModel.includes('nvidia'))) {
+      try {
+        const visionModel = config.aiModel || 'deepseek-ai/deepseek-v4.1-flash';
+        const completion = await this.nvidiaClient.chat.completions.create({
+          model: visionModel,
+          messages: [
+            { role: 'system', content: systemInstruction },
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: `[${senderName}]: ${userPrompt}` },
+                {
+                  type: 'image_url',
+                  image_url: {
+                    url: `data:${cleanMime};base64,${base64Image}`
+                  }
+                }
+              ]
+            }
+          ]
+        });
+
+        const reply = completion.choices[0]?.message?.content || 'Unable to analyze image.';
+        if (chatId) {
+          this.appendToHistory(chatId, { role: 'user', content: `[Sent Image] ${userPrompt}`, senderName });
+          this.appendToHistory(chatId, { role: 'assistant', content: reply, senderName: 'Assistant' });
+        }
+        return reply.trim();
+      } catch (err: any) {
+        logger.error({ err }, 'Error analyzing image via NVIDIA NIM vision');
+      }
+    }
+
     // 1. Try OpenRouter (supports google/gemini-2.5-flash, openai/gpt-4o, etc.)
     if (this.openrouterClient) {
       try {
@@ -825,6 +931,43 @@ Guidelines:
         return reply.trim();
       } catch (err: any) {
         logger.error({ err }, 'Error analyzing image via OpenAI');
+      }
+    }
+
+    // 4. Try NVIDIA NIM directly
+    if (this.nvidiaClient) {
+      try {
+        const visionModel = config.aiModel.includes('deepseek') || config.aiModel.includes('nvidia')
+          ? config.aiModel
+          : 'deepseek-ai/deepseek-v4.1-flash';
+
+        const completion = await this.nvidiaClient.chat.completions.create({
+          model: visionModel,
+          messages: [
+            { role: 'system', content: systemInstruction },
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: `[${senderName}]: ${userPrompt}` },
+                {
+                  type: 'image_url',
+                  image_url: {
+                    url: `data:${cleanMime};base64,${base64Image}`
+                  }
+                }
+              ]
+            }
+          ]
+        });
+
+        const reply = completion.choices[0]?.message?.content || 'Unable to analyze image.';
+        if (chatId) {
+          this.appendToHistory(chatId, { role: 'user', content: `[Sent Image] ${userPrompt}`, senderName });
+          this.appendToHistory(chatId, { role: 'assistant', content: reply, senderName: 'Assistant' });
+        }
+        return reply.trim();
+      } catch (err: any) {
+        logger.error({ err }, 'Error analyzing image via NVIDIA NIM');
       }
     }
 
