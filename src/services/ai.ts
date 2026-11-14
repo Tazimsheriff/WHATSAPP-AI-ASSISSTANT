@@ -12,8 +12,43 @@ interface ChatMessage {
   senderName?: string;
 }
 
+// NVIDIA NIM free models to rotate through on rate limits
+const NVIDIA_FREE_MODELS = [
+  'deepseek-ai/deepseek-v4.1-flash',
+  'deepseek-ai/deepseek-r1',
+  'meta/llama-3.3-70b-instruct',
+  'nvidia/llama-3.1-nemotron-70b-instruct',
+  'mistralai/mixtral-8x7b-instruct-v0.1',
+  'google/gemma-2-9b-it',
+];
+
 // In-memory conversation history buffer
 const chatHistoryMap = new Map<string, ChatMessage[]>();
+
+// Track which NVIDIA model index we're on per chat (for rate limit rotation)
+const nvidiaModelIndexMap = new Map<string, number>();
+
+function isRateLimitError(err: any): boolean {
+  if (!err) return false;
+  const message = err.message || err.toString();
+  const status = err.status || err.response?.status || err.code;
+  return (
+    status === 429 ||
+    message.includes('rate limit') ||
+    message.includes('Rate limit') ||
+    message.includes('RATE_LIMIT') ||
+    message.includes('quota') ||
+    message.includes('Quota') ||
+    message.includes('Too Many Requests')
+  );
+}
+
+function getNextNvidiaModel(chatId: string): string {
+  const currentIndex = nvidiaModelIndexMap.get(chatId) || 0;
+  const nextIndex = (currentIndex + 1) % NVIDIA_FREE_MODELS.length;
+  nvidiaModelIndexMap.set(chatId, nextIndex);
+  return NVIDIA_FREE_MODELS[nextIndex];
+}
 
 export class AIService {
   private openrouterClient: OpenAI | null = null;
@@ -107,34 +142,50 @@ Guidelines:
 - You can answer questions, summarize text, assist with brainstorming, calculate, debug code, and more.${memoryContext}`;
 
     // 0. Priority: If NVIDIA model is specified and nvidiaClient is configured
-    if (this.nvidiaClient && (config.aiModel.includes('deepseek') || config.aiModel.includes('nvidia'))) {
-      try {
-        const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-          { role: 'system', content: systemInstruction },
-          ...history.slice(-8).map(m => ({
-            role: (m.role === 'model' || m.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant',
-            content: `${m.senderName ? `[${m.senderName}]: ` : ''}${m.content}`
-          })),
-          { role: 'user', content: `[${senderName}]: ${prompt}` }
-        ];
+        if (this.nvidiaClient && (config.aiModel.includes('deepseek') || config.aiModel.includes('nvidia'))) {
+          let currentModel = config.aiModel || 'deepseek-ai/deepseek-v4.1-flash';
+          let attempts = 0;
+          const maxAttempts = NVIDIA_FREE_MODELS.length;
 
-        const modelName = config.aiModel || 'deepseek-ai/deepseek-v4.1-flash';
-        const completion = await this.nvidiaClient.chat.completions.create({
-          model: modelName,
-          messages
-        });
+          while (attempts < maxAttempts) {
+            try {
+              const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+                { role: 'system', content: systemInstruction },
+                ...history.slice(-8).map(m => ({
+                  role: (m.role === 'model' || m.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant',
+                  content: `${m.senderName ? `[${m.senderName}]: ` : ''}${m.content}`
+                })),
+                { role: 'user', content: `[${senderName}]: ${prompt}` }
+              ];
 
-        const reply = completion.choices[0]?.message?.content || 'No response generated.';
-        this.appendToHistory(chatId, { role: 'user', content: prompt, senderName });
-        this.appendToHistory(chatId, { role: 'assistant', content: reply, senderName: 'Carnivore' });
-        return reply.trim();
-      } catch (err: any) {
-        logger.error({ err }, 'Error calling NVIDIA NIM API for reply');
-        if (!this.openrouterClient && !this.geminiClient && !this.groqClient && !this.openaiClient) {
-          return `⚠️ Error generating AI reply via NVIDIA NIM: ${err.message || 'Unknown error'}`;
+              const completion = await this.nvidiaClient.chat.completions.create({
+                model: currentModel,
+                messages
+              });
+
+              const reply = completion.choices[0]?.message?.content || 'No response generated.';
+              this.appendToHistory(chatId, { role: 'user', content: prompt, senderName });
+              this.appendToHistory(chatId, { role: 'assistant', content: reply, senderName: 'Carnivore' });
+              return reply.trim();
+            } catch (err: any) {
+              logger.error({ err, model: currentModel, attempt: attempts + 1 }, 'Error calling NVIDIA NIM API for reply');
+          
+              // If rate limited, try next model
+              if (isRateLimitError(err) && attempts < maxAttempts - 1) {
+                currentModel = getNextNvidiaModel(chatId);
+                logger.warn({ nextModel: currentModel, chatId }, 'Rate limited, switching to next NVIDIA model');
+                attempts++;
+                continue;
+              }
+          
+              // If not rate limited or exhausted all models, fall through
+              if (!this.openrouterClient && !this.geminiClient && !this.groqClient && !this.openaiClient) {
+                return `⚠️ Error generating AI reply via NVIDIA NIM: ${err.message || 'Unknown error'}`;
+              }
+              break;
+            }
+          }
         }
-      }
-    }
 
     // 1. Try OpenRouter (if configured)
     if (this.openrouterClient) {
@@ -176,37 +227,53 @@ Guidelines:
           }
 
     // 2. Try NVIDIA NIM (if configured)
-    if (this.nvidiaClient) {
-      try {
-        const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-          { role: 'system', content: systemInstruction },
-          ...history.slice(-8).map(m => ({
-            role: (m.role === 'model' || m.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant',
-            content: `${m.senderName ? `[${m.senderName}]: ` : ''}${m.content}`
-          })),
-          { role: 'user', content: `[${senderName}]: ${prompt}` }
-        ];
+        if (this.nvidiaClient) {
+          let currentModel = config.aiModel || 'nvidia/llama-3.1-nemotron-70b-instruct';
+          let attempts = 0;
+          const maxAttempts = NVIDIA_FREE_MODELS.length;
 
-        const modelName = config.aiModel || 'nvidia/llama-3.1-nemotron-70b-instruct';
-        const completion = await this.nvidiaClient.chat.completions.create({
-          model: modelName,
-          messages,
-          temperature: 0.6,
-          top_p: 0.7,
-          max_tokens: 1024
-        });
+          while (attempts < maxAttempts) {
+            try {
+              const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+                { role: 'system', content: systemInstruction },
+                ...history.slice(-8).map(m => ({
+                  role: (m.role === 'model' || m.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant',
+                  content: `${m.senderName ? `[${m.senderName}]: ` : ''}${m.content}`
+                })),
+                { role: 'user', content: `[${senderName}]: ${prompt}` }
+              ];
 
-        const reply = completion.choices[0]?.message?.content || 'No response generated.';
-        this.appendToHistory(chatId, { role: 'user', content: prompt, senderName });
-        this.appendToHistory(chatId, { role: 'assistant', content: reply, senderName: 'Carnivore' });
-        return reply.trim();
-      } catch (err: any) {
-        logger.error({ err }, 'Error calling NVIDIA API for reply');
-        if (!this.geminiClient && !this.groqClient && !this.openaiClient) {
-          return `⚠️ Error generating AI reply via NVIDIA NIM: ${err.message || 'Unknown error'}`;
+              const completion = await this.nvidiaClient.chat.completions.create({
+                model: currentModel,
+                messages,
+                temperature: 0.6,
+                top_p: 0.7,
+                max_tokens: 1024
+              });
+
+              const reply = completion.choices[0]?.message?.content || 'No response generated.';
+              this.appendToHistory(chatId, { role: 'user', content: prompt, senderName });
+              this.appendToHistory(chatId, { role: 'assistant', content: reply, senderName: 'Carnivore' });
+              return reply.trim();
+            } catch (err: any) {
+              logger.error({ err, model: currentModel, attempt: attempts + 1 }, 'Error calling NVIDIA API for reply');
+          
+              // If rate limited, try next model
+              if (isRateLimitError(err) && attempts < maxAttempts - 1) {
+                currentModel = getNextNvidiaModel(chatId);
+                logger.warn({ nextModel: currentModel, chatId }, 'Rate limited, switching to next NVIDIA model');
+                attempts++;
+                continue;
+              }
+          
+              // If not rate limited or exhausted all models, fall through
+              if (!this.geminiClient && !this.groqClient && !this.openaiClient) {
+                return `⚠️ Error generating AI reply via NVIDIA NIM: ${err.message || 'Unknown error'}`;
+              }
+              break;
+            }
+          }
         }
-      }
-    }
 
     // 3. Try Direct Gemini
     if (this.geminiClient) {
@@ -770,38 +837,54 @@ Guidelines:
 - Format your response nicely using WhatsApp markdown (*bold*, _italic_, bullet points, \`code\`).`;
 
     // 0. Priority: Try NVIDIA NIM if model specified
-    if (this.nvidiaClient && (config.aiModel.includes('deepseek') || config.aiModel.includes('nvidia'))) {
-      try {
-        const visionModel = config.aiModel || 'deepseek-ai/deepseek-v4.1-flash';
-        const completion = await this.nvidiaClient.chat.completions.create({
-          model: visionModel,
-          messages: [
-            { role: 'system', content: systemInstruction },
-            {
-              role: 'user',
-              content: [
-                { type: 'text', text: `[${senderName}]: ${userPrompt}` },
-                {
-                  type: 'image_url',
-                  image_url: {
-                    url: `data:${cleanMime};base64,${base64Image}`
-                  }
-                }
-              ]
-            }
-          ]
-        });
+        if (this.nvidiaClient && (config.aiModel.includes('deepseek') || config.aiModel.includes('nvidia'))) {
+          let currentModel = config.aiModel || 'deepseek-ai/deepseek-v4.1-flash';
+          let attempts = 0;
+          const maxAttempts = NVIDIA_FREE_MODELS.length;
 
-        const reply = completion.choices[0]?.message?.content || 'Unable to analyze image.';
-        if (chatId) {
-          this.appendToHistory(chatId, { role: 'user', content: `[Sent Image] ${userPrompt}`, senderName });
-          this.appendToHistory(chatId, { role: 'assistant', content: reply, senderName: 'Assistant' });
+          while (attempts < maxAttempts) {
+            try {
+              const completion = await this.nvidiaClient.chat.completions.create({
+                model: currentModel,
+                messages: [
+                  { role: 'system', content: systemInstruction },
+                  {
+                    role: 'user',
+                    content: [
+                      { type: 'text', text: `[${senderName}]: ${userPrompt}` },
+                      {
+                        type: 'image_url',
+                        image_url: {
+                          url: `data:${cleanMime};base64,${base64Image}`
+                        }
+                      }
+                    ]
+                  }
+                ]
+              });
+
+              const reply = completion.choices[0]?.message?.content || 'Unable to analyze image.';
+              if (chatId) {
+                this.appendToHistory(chatId, { role: 'user', content: `[Sent Image] ${userPrompt}`, senderName });
+                this.appendToHistory(chatId, { role: 'assistant', content: reply, senderName: 'Assistant' });
+              }
+              return reply.trim();
+            } catch (err: any) {
+              logger.error({ err, model: currentModel, attempt: attempts + 1 }, 'Error analyzing image via NVIDIA NIM vision');
+          
+              // If rate limited, try next model
+              if (isRateLimitError(err) && attempts < maxAttempts - 1) {
+                currentModel = getNextNvidiaModel(chatId || 'default');
+                logger.warn({ nextModel: currentModel, chatId }, 'Rate limited, switching to next NVIDIA model for vision');
+                attempts++;
+                continue;
+              }
+          
+              // If not rate limited or exhausted all models, fall through
+              break;
+            }
+          }
         }
-        return reply.trim();
-      } catch (err: any) {
-        logger.error({ err }, 'Error analyzing image via NVIDIA NIM vision');
-      }
-    }
 
     // 1. Try OpenRouter (supports google/gemini-2.5-flash, openai/gpt-4o, etc.)
     if (this.openrouterClient) {
@@ -841,42 +924,57 @@ Guidelines:
     }
 
     // 2. Try NVIDIA NIM (supports meta/llama-3.2-11b-vision-instruct, etc.)
-    if (this.nvidiaClient) {
-      try {
-        const visionModel = config.aiModel.includes('vision')
-          ? config.aiModel
-          : 'meta/llama-3.2-11b-vision-instruct';
+        if (this.nvidiaClient) {
+          let currentModel = config.aiModel.includes('vision')
+            ? config.aiModel
+            : 'meta/llama-3.2-11b-vision-instruct';
+          let attempts = 0;
+          const maxAttempts = NVIDIA_FREE_MODELS.length;
 
-        const completion = await this.nvidiaClient.chat.completions.create({
-          model: visionModel,
-          messages: [
-            { role: 'system', content: systemInstruction },
-            {
-              role: 'user',
-              content: [
-                { type: 'text', text: `[${senderName}]: ${userPrompt}` },
-                {
-                  type: 'image_url',
-                  image_url: {
-                    url: `data:${cleanMime};base64,${base64Image}`
+          while (attempts < maxAttempts) {
+            try {
+              const completion = await this.nvidiaClient.chat.completions.create({
+                model: currentModel,
+                messages: [
+                  { role: 'system', content: systemInstruction },
+                  {
+                    role: 'user',
+                    content: [
+                      { type: 'text', text: `[${senderName}]: ${userPrompt}` },
+                      {
+                        type: 'image_url',
+                        image_url: {
+                          url: `data:${cleanMime};base64,${base64Image}`
+                        }
+                      }
+                    ]
                   }
-                }
-              ]
-            }
-          ],
-          max_tokens: 1024
-        });
+                ],
+                max_tokens: 1024
+              });
 
-        const reply = completion.choices[0]?.message?.content || 'Unable to analyze image.';
-        if (chatId) {
-          this.appendToHistory(chatId, { role: 'user', content: `[Sent Image] ${userPrompt}`, senderName });
-          this.appendToHistory(chatId, { role: 'assistant', content: reply, senderName: 'Carnivore' });
+              const reply = completion.choices[0]?.message?.content || 'Unable to analyze image.';
+              if (chatId) {
+                this.appendToHistory(chatId, { role: 'user', content: `[Sent Image] ${userPrompt}`, senderName });
+                this.appendToHistory(chatId, { role: 'assistant', content: reply, senderName: 'Carnivore' });
+              }
+              return reply.trim();
+            } catch (err: any) {
+              logger.error({ err, model: currentModel, attempt: attempts + 1 }, 'Error analyzing image via NVIDIA NIM');
+          
+              // If rate limited, try next model
+              if (isRateLimitError(err) && attempts < maxAttempts - 1) {
+                currentModel = getNextNvidiaModel(chatId || 'default');
+                logger.warn({ nextModel: currentModel, chatId }, 'Rate limited, switching to next NVIDIA model for vision');
+                attempts++;
+                continue;
+              }
+          
+              // If not rate limited or exhausted all models, fall through
+              break;
+            }
+          }
         }
-        return reply.trim();
-      } catch (err: any) {
-        logger.error({ err }, 'Error analyzing image via NVIDIA NIM');
-      }
-    }
 
     // 3. Try Gemini directly
     if (this.geminiClient) {
